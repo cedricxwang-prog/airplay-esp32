@@ -27,12 +27,22 @@ input:focus{outline:none;border-color:#e94560}
 .btn-danger:hover{background:#c82333}
 .btn-block{width:100%;margin-top:10px}
 .btn:disabled{opacity:0.5;cursor:not-allowed}
-.wifi-list{max-height:180px;overflow-y:auto;margin:12px 0;border-radius:8px}
-.wifi-item{padding:12px;background:rgba(0,0,0,0.2);margin-bottom:4px;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.wifi-list{max-height:260px;overflow-y:auto;margin:12px 0;border-radius:8px}
+.wifi-item{width:100%;padding:12px;background:rgba(0,0,0,0.2);margin-bottom:4px;border:1px solid transparent;border-radius:6px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;color:#fff;text-align:left;font:inherit}
 .wifi-item:hover{background:rgba(233,69,96,0.2)}
 .wifi-item.sel{background:rgba(233,69,96,0.3);border:1px solid #e94560}
-.wifi-item .ssid{font-weight:500}
-.wifi-item .rssi{font-size:12px;color:#888}
+.wifi-details{min-width:0}
+.wifi-item .ssid{font-weight:500;display:block;overflow-wrap:anywhere}
+.wifi-item .rssi{font-size:12px;color:#888;flex-shrink:0}
+.wifi-meta{display:block;font-size:12px;color:#b5bdcc;margin-top:5px}
+.wifi-connect-panel{padding:16px;border:1px solid #e94560;border-radius:10px;margin:14px 0}
+.wifi-connect-panel h3{font-size:16px;margin-bottom:12px;overflow-wrap:anywhere}
+.wifi-connect-panel input{font-size:16px}
+.wifi-check{display:flex;gap:8px;align-items:center;margin:12px 0;font-size:13px}
+.wifi-current{font-size:13px;color:#b5bdcc;overflow-wrap:anywhere;margin-bottom:12px}
+.wifi-manual{margin:16px 0 0}
+.wifi-manual summary{cursor:pointer;font-size:13px;color:#b5bdcc;margin-bottom:14px}
+[hidden]{display:none!important}
 .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .info-item{background:rgba(0,0,0,0.2);padding:12px;border-radius:8px}
 .info-item label{font-size:11px;color:#888;display:block;margin-bottom:4px}
@@ -52,13 +62,22 @@ input:focus{outline:none;border-color:#e94560}
 <div class='header'><h1>AirPlay Receiver</h1><p>by Cedric</p><select id='ui-language' aria-label='Language / 语言'><option value='zh'>中文</option><option value='en'>English</option></select><p data-zh="ESP32 配置面板" data-en="ESP32 Configuration Panel">ESP32 配置面板</p></div>
 <div id='status-bar' class='status-bar' data-zh="加载中…" data-en="Loading...">加载中…</div>
 <div class='card'><h2 data-zh="WiFi 网络" data-en="WiFi Network">WiFi 网络</h2>
+<p id='wifi-current' class='wifi-current'></p>
 <div class='form-group'><label for='saved-wifi' data-zh='已保存的 WiFi' data-en='Saved WiFi'>已保存的 WiFi</label><select id='saved-wifi'></select></div>
 <button class='btn btn-secondary' id='saved-wifi-connect' onclick='connectSavedWiFi()' disabled data-zh='连接已保存的 WiFi' data-en='Connect to saved WiFi'>连接已保存的 WiFi</button>
-<button class='btn btn-secondary' onclick='scanWiFi()' data-zh="扫描网络" data-en="Scan Networks">扫描网络</button>
+<button class='btn btn-secondary' id='wifi-scan' onclick='scanWiFi()' data-zh="扫描网络" data-en="Scan Networks">扫描网络</button>
 <div id='wifi-list' class='wifi-list'></div>
+<form id='wifi-connect-panel' class='wifi-connect-panel' hidden onsubmit='event.preventDefault();connectSelectedWiFi()'>
+<h3 id='wifi-selected-name'></h3>
+<p id='wifi-selected-hint' class='wifi-current'></p>
+<label id='wifi-reuse-row' class='wifi-check' hidden><input type='checkbox' id='wifi-reuse' onchange='updateWiFiPasswordPanel()'><span data-zh='使用设备中保存的密码' data-en='Use password saved on this device'>使用设备中保存的密码</span></label>
+<div id='wifi-selected-password-group' class='form-group'><label for='wifi-selected-password' data-zh='密码' data-en='Password'>密码</label><input type='password' id='wifi-selected-password' autocomplete='new-password' maxlength='64' data-placeholder-zh='输入此网络的密码' data-placeholder-en='Enter this network’s password' placeholder='输入此网络的密码'></div>
+<div class='actions'><button type='submit' id='wifi-selected-connect' class='btn btn-primary' data-zh='连接' data-en='Connect'>连接</button><button type='button' id='wifi-selected-cancel' class='btn btn-secondary' onclick='closeWiFiPanel()' data-zh='取消' data-en='Cancel'>取消</button></div>
+</form>
+<details class='wifi-manual'><summary data-zh='隐藏网络 / 手动输入' data-en='Hidden network / Enter manually'>隐藏网络 / 手动输入</summary>
 <div class='form-group'><label data-zh="网络名称" data-en="Network Name (SSID)">网络名称</label><input type='text' id='wifi-ssid' placeholder='输入或选择网络' data-placeholder-zh="输入或选择网络" data-placeholder-en="Enter or select network"></div>
 <div class='form-group'><label data-zh="密码" data-en="Password">密码</label><input type='password' id='wifi-pass' placeholder='输入密码' data-placeholder-zh="输入密码" data-placeholder-en="Enter password"></div>
-<button class='btn btn-primary btn-block' onclick='saveWiFi()' data-zh="连接 WiFi" data-en="Connect to WiFi">连接 WiFi</button>
+<button class='btn btn-primary btn-block' id='wifi-manual-connect' onclick='saveWiFi()' data-zh="连接 WiFi" data-en="Connect to WiFi">连接 WiFi</button></details>
 <div id='wifi-msg'></div></div>
 <div class='card'><h2 data-zh="设备设置" data-en="Device Settings">设备设置</h2>
 <div class='form-group'><label data-zh="AirPlay 设备名称" data-en="AirPlay Device Name">AirPlay 设备名称</label><input type='text' id='dev-name' placeholder='我的音箱' data-placeholder-zh="我的音箱" data-placeholder-en="My Speaker"></div>
@@ -134,26 +153,77 @@ function applyLanguage(){
 }
 
 function msg(id,txt,type){var e=document.getElementById(id);if(e){e.replaceChildren();var box=document.createElement('div');box.className='msg '+type;box.textContent=txt;e.appendChild(box);setTimeout(function(){e.innerHTML='';},4000);}}
-var savedWiFi=[];
-function renderSavedWiFi(){var sel=document.getElementById('saved-wifi');var previous=sel.value;sel.replaceChildren();var placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=savedWiFi.length?tr('请选择已保存的网络','Select a saved network'):tr('暂无已保存的网络','No saved networks');sel.appendChild(placeholder);savedWiFi.forEach(function(ssid){var opt=document.createElement('option');opt.value=ssid;opt.textContent=ssid;sel.appendChild(opt);});sel.value=previous;document.getElementById('saved-wifi-connect').disabled=!sel.value;sel.onchange=function(){document.getElementById('saved-wifi-connect').disabled=!this.value;};}
-async function loadSavedWiFi(){try{var r=await fetch('/api/wifi/saved');if(!r.ok)throw new Error('HTTP '+r.status);var d=await r.json();if(d.success){savedWiFi=d.networks;renderSavedWiFi();}}catch(e){msg('wifi-msg',tr('无法读取已保存网络','Could not load saved networks'),'err');}}
-async function connectSavedWiFi(){var ssid=document.getElementById('saved-wifi').value;if(!ssid)return;var btn=document.getElementById('saved-wifi-connect');btn.disabled=true;try{var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:ssid,use_saved:true})});var d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'HTTP '+r.status);msg('wifi-msg',tr('已选择，重启连接中…','Selected. Restarting to connect...'),'ok');}catch(e){msg('wifi-msg',tr('连接未确认：','Connection unconfirmed: ')+e.message,'err');btn.disabled=false;}}
+var savedWiFi=[],scannedNetworks=null,selectedNetwork=null,wifiConnecting=false,currentWiFiInfo=null,currentWiFiInfoAt=0;
+function wifiMessage(text,type){var box=document.createElement('div');box.className='msg '+type;box.textContent=text;document.getElementById('wifi-msg').replaceChildren(box);}
+function renderWiFiCurrent(){var e=document.getElementById('wifi-current');e.textContent=currentWiFiInfo?(currentWiFiInfo.wifi_connected?tr('当前已连接：','Currently connected: ')+currentWiFiInfo.wifi_ssid:tr('WiFi 未连接','WiFi is not connected')):tr('连接状态暂不可读','Connection status is unavailable');}
+function networkIsConnected(n){if(currentWiFiInfo)return !!currentWiFiInfo.wifi_connected&&!!n.bssid&&String(n.bssid).toLowerCase()===String(currentWiFiInfo.wifi_bssid||'').toLowerCase();return !!n.connected;}
+function renderScanNetworks(){
+  if(scannedNetworks===null)return;
+  var list=document.getElementById('wifi-list');list.replaceChildren();
+  if(!scannedNetworks.length){var empty=document.createElement('div');empty.className='msg info';empty.textContent=tr('未发现网络','No networks found');list.appendChild(empty);return;}
+  scannedNetworks.forEach(function(n){
+    var item=document.createElement('button');item.type='button';item.className='wifi-item';item.disabled=!n.ssid;item.title=n.bssid||'';
+    if(selectedNetwork&&n.bssid===selectedNetwork.bssid&&n.ssid===selectedNetwork.ssid)item.classList.add('sel');
+    var details=document.createElement('span');details.className='wifi-details';var name=document.createElement('span');name.className='ssid';name.textContent=n.ssid||tr('隐藏网络（请手动输入）','Hidden network (enter manually)');
+    var meta=document.createElement('span');meta.className='wifi-meta';var labels=[n.secure===false?tr('开放网络','Open network'):tr('需要密码','Password required')];
+    if(networkIsConnected(n))labels.push(tr('已连接','Connected'));if(savedWiFi.indexOf(n.ssid)>=0)labels.push(tr('已保存','Saved'));meta.textContent=labels.join(' · ');details.append(name,meta);
+    var signal=document.createElement('span');signal.className='rssi';signal.textContent=n.rssi+' dBm';item.append(details,signal);item.onclick=function(){openWiFiPanel(n);};list.appendChild(item);
+  });
+}
+function renderSavedWiFi(){var sel=document.getElementById('saved-wifi');var previous=sel.value;sel.replaceChildren();var placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=savedWiFi.length?tr('请选择已保存的网络','Select a saved network'):tr('暂无已保存的网络','No saved networks');sel.appendChild(placeholder);savedWiFi.forEach(function(ssid){var opt=document.createElement('option');opt.value=ssid;opt.textContent=ssid;sel.appendChild(opt);});sel.value=previous;document.getElementById('saved-wifi-connect').disabled=wifiConnecting||!sel.value;sel.onchange=function(){document.getElementById('saved-wifi-connect').disabled=wifiConnecting||!this.value;};renderScanNetworks();updateWiFiPasswordPanel();renderWiFiCurrent();}
+async function loadSavedWiFi(){try{var r=await fetch('/api/wifi/saved',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);var d=await r.json();if(d.success&&Array.isArray(d.networks)){savedWiFi=d.networks.filter(function(n){return typeof n==='string';});renderSavedWiFi();}}catch(e){wifiMessage(tr('无法读取已保存网络','Could not load saved networks'),'err');}}
+function openWiFiPanel(n){if(wifiConnecting||!n.ssid)return;selectedNetwork=n;document.getElementById('wifi-ssid').value=n.ssid;document.getElementById('wifi-selected-password').value='';document.getElementById('wifi-reuse').checked=savedWiFi.indexOf(n.ssid)>=0;document.getElementById('wifi-connect-panel').hidden=false;document.getElementById('wifi-msg').replaceChildren();updateWiFiPasswordPanel();renderScanNetworks();document.getElementById('wifi-connect-panel').scrollIntoView({block:'nearest',behavior:'smooth'});if(!document.getElementById('wifi-selected-password').disabled)document.getElementById('wifi-selected-password').focus();else document.getElementById('wifi-selected-connect').focus();}
+function updateWiFiPasswordPanel(){if(!selectedNetwork)return;var saved=savedWiFi.indexOf(selectedNetwork.ssid)>=0;var reuse=document.getElementById('wifi-reuse');if(!saved)reuse.checked=false;document.getElementById('wifi-reuse-row').hidden=!saved;reuse.disabled=wifiConnecting;var input=document.getElementById('wifi-selected-password');var needsPassword=selectedNetwork.secure!==false&&!reuse.checked;input.disabled=!needsPassword||wifiConnecting;document.getElementById('wifi-selected-password-group').hidden=!needsPassword;document.getElementById('wifi-selected-name').textContent=selectedNetwork.ssid;document.getElementById('wifi-selected-hint').textContent=reuse.checked?tr('将使用设备中保存的密码，无需再次输入。','Uses the password saved on this device. No need to enter it again.'):selectedNetwork.secure===false?tr('这是开放网络，无需密码。','This is an open network. No password is needed.'):tr('输入密码，然后点击连接。','Enter the password, then tap Connect.');}
+function closeWiFiPanel(){if(wifiConnecting)return;selectedNetwork=null;document.getElementById('wifi-connect-panel').hidden=true;document.getElementById('wifi-selected-password').value='';renderScanNetworks();}
+function setWiFiConnecting(busy){wifiConnecting=busy;['wifi-selected-connect','wifi-selected-cancel','wifi-manual-connect','wifi-scan'].forEach(function(id){document.getElementById(id).disabled=busy;});document.getElementById('saved-wifi-connect').disabled=busy||!document.getElementById('saved-wifi').value;updateWiFiPasswordPanel();}
+function validWiFiSSID(ssid){var length=new TextEncoder().encode(ssid).length;return length>=1&&length<=32&&ssid.indexOf('\0')<0;}
+function validWiFiPassword(password){var length=new TextEncoder().encode(password).length;return password.indexOf('\0')<0&&(length===0||(length>=8&&length<=63)||/^[0-9a-fA-F]{64}$/.test(password));}
+async function waitForWiFiConnection(ssid,baseline,baselineAt,started){
+  for(var attempt=0;attempt<15;attempt++){
+    await new Promise(function(resolve){setTimeout(resolve,3000);});
+    var info=await loadInfo(2500);if(!info)continue;
+    var sameDevice=!baseline||!baseline.mac||info.mac===baseline.mac;
+    var expectedUptime=baseline?baseline.uptime_s+(Date.now()-baselineAt)/1000:(Date.now()-started)/1000+1;
+    var rebooted=typeof info.uptime_s==='number'&&info.uptime_s<expectedUptime-1;
+    if(sameDevice&&rebooted&&info.wifi_connected&&info.wifi_ssid===ssid){wifiMessage(tr('已连接：','Connected: ')+ssid,'ok');await loadSavedWiFi();return true;}
+  }
+  wifiMessage(tr('已保存，但连接尚未确认。若设备换了 IP，请重新打开设备地址；请检查密码及网络是否可用。','Saved, but connection is unconfirmed. If the IP changed, reopen the device address. Check the password and network availability.'),'err');return false;
+}
+async function submitWiFiConnection(payload){
+  if(wifiConnecting)return false;
+  if(!validWiFiSSID(payload.ssid)){wifiMessage(tr('网络名称须为 1–32 字节','Network name must be 1–32 bytes'),'err');return false;}
+  if(!payload.use_saved&&!validWiFiPassword(payload.password)){wifiMessage(tr('密码须为 8–63 字节或 64 位十六进制；开放网络可留空','Password must be 8–63 bytes or 64 hexadecimal digits; leave empty for an open network'),'err');return false;}
+  setWiFiConnecting(true);var controller=new AbortController();var timeout;
+  try{var baseline=await loadInfo(2500);var baselineAt=currentWiFiInfoAt;var started=Date.now();timeout=setTimeout(function(){controller.abort();},15000);
+    var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});var d;
+    try{d=await r.json();}catch(e){if(e.name==='AbortError')throw e;throw new Error(tr('响应格式错误','Invalid response')+' (HTTP '+r.status+')');}
+    if(!r.ok||!d.success)throw new Error(d.error||'HTTP '+r.status);
+    clearTimeout(timeout);document.getElementById('wifi-selected-password').value='';document.getElementById('wifi-pass').value='';
+    wifiMessage(tr('已保存，正在重启连接…正在等待设备确认。换网后设备地址可能改变。','Saved. Restarting to connect... Waiting for device confirmation. The device address may change after switching networks.'),'info');
+    return await waitForWiFiConnection(payload.ssid,baseline,baselineAt,started);
+  }catch(e){wifiMessage(tr('连接未确认：','Connection unconfirmed: ')+(e.name==='AbortError'?tr('请求超时，请重新读取设备状态','Request timed out. Check device status again'):e.message),'err');return false;}
+  finally{clearTimeout(timeout);setWiFiConnecting(false);}
+}
+async function connectSelectedWiFi(){if(!selectedNetwork||wifiConnecting)return;var ssid=selectedNetwork.ssid;var reuse=document.getElementById('wifi-reuse').checked&&savedWiFi.indexOf(ssid)>=0;var password=selectedNetwork.secure===false?'':document.getElementById('wifi-selected-password').value;if(!reuse&&selectedNetwork.secure!==false&&!password){wifiMessage(tr('请输入此网络的密码','Enter this network’s password'),'err');document.getElementById('wifi-selected-password').focus();return;}await submitWiFiConnection(reuse?{ssid:ssid,use_saved:true}:{ssid:ssid,password:password});}
+async function connectSavedWiFi(){var ssid=document.getElementById('saved-wifi').value;if(ssid)await submitWiFiConnection({ssid:ssid,use_saved:true});}
 async function scanWiFi(){
-  var l=document.getElementById('wifi-list');l.innerHTML='<div class="msg info">'+tr('扫描中…','Scanning...')+'</div>';
-  try{var r=await fetch('/api/wifi/scan');var d=await r.json();
-    if(d.success&&d.networks.length>0){l.innerHTML='';d.networks.forEach(function(n){
-      var i=document.createElement('div');i.className='wifi-item';
-      var ssid=document.createElement('span');ssid.className='ssid';ssid.textContent=n.ssid;var signal=document.createElement('span');signal.className='rssi';signal.textContent=n.rssi+' dBm';i.append(ssid,signal);
-      i.onclick=function(){document.querySelectorAll('.wifi-item').forEach(function(x){x.classList.remove('sel');});i.classList.add('sel');document.getElementById('wifi-ssid').value=n.ssid;};
-      l.appendChild(i);});}
-    else{l.innerHTML='<div class="msg info">'+tr('未发现网络','No networks found')+'</div>';}}
-  catch(e){l.innerHTML='<div class="msg err">'+tr('扫描失败','Scan failed')+'</div>';}}
-async function saveWiFi(){
-  var s=document.getElementById('wifi-ssid').value.trim();var p=document.getElementById('wifi-pass').value;
-  if(!s){msg('wifi-msg',tr("请输入网络名称","Enter network name"),'err');return;}
-  try{var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:s,password:p})});
-    var d=await r.json();if(d.success){msg('wifi-msg',tr("已保存！重启中…","Saved! Restarting..."),'ok');}else{msg('wifi-msg',d.error,'err');}}
-  catch(e){msg('wifi-msg',tr("错误","Error"),'err');}}
+  var l=document.getElementById('wifi-list');var btn=document.getElementById('wifi-scan');
+  if(btn.disabled||wifiConnecting)return;
+  btn.disabled=true;scannedNetworks=null;
+  function showScanMessage(text,type){var box=document.createElement('div');box.className='msg '+type;box.textContent=text;l.replaceChildren(box);}
+  showScanMessage(tr('扫描中…','Scanning...'),'info');
+  var controller=new AbortController();var timeout=setTimeout(function(){controller.abort();},20000);
+  try{var r=await fetch('/api/wifi/scan',{cache:'no-store',signal:controller.signal});var d;
+    try{d=await r.json();}catch(e){if(e.name==='AbortError')throw e;throw new Error(tr('响应格式错误','Invalid response')+' (HTTP '+r.status+')');}
+    if(!r.ok||!d.success){var error=d.error||'HTTP '+r.status;
+      if(error==='ESP_ERR_WIFI_STATE')error=tr('WiFi 正忙或正在连接，请稍后重试','WiFi is busy or connecting. Try again shortly')+' ('+error+')';
+      else if(error==='ESP_ERR_WIFI_TIMEOUT'||error==='ESP_ERR_TIMEOUT')error=tr('设备扫描超时，请重试','Device scan timed out. Try again')+' ('+error+')';
+      throw new Error(error);}
+    if(!Array.isArray(d.networks))throw new Error(tr('响应缺少网络列表','Response is missing the network list'));
+    scannedNetworks=d.networks;renderScanNetworks();
+  }catch(e){var detail=e.name==='AbortError'?tr('请求超时，请重试','Request timed out. Try again'):e.message;showScanMessage(tr('扫描失败：','Scan failed: ')+detail,'err');}
+  finally{clearTimeout(timeout);btn.disabled=wifiConnecting;}}
+async function saveWiFi(){await submitWiFiConnection({ssid:document.getElementById('wifi-ssid').value,password:document.getElementById('wifi-pass').value});}
 async function loadIcon(){try{var r=await fetch('/api/device/icon');var d=await r.json();if(d.success){document.getElementById('airplay-icon').value=String(d.mode);if(d.restart_required)msg('icon-msg',tr('重启后应用图标','Restart to apply icon'),'info');}}catch(e){console.warn('Could not load icon',e);}}
 async function saveIcon(){try{var r=await fetch('/api/device/icon',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:Number(document.getElementById('airplay-icon').value)})});var d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'HTTP '+r.status);msg('icon-msg',d.restart_required?tr('已保存，重启后生效','Saved. Restart to apply.'):tr('已保存','Saved'),'ok');}catch(e){msg('icon-msg',tr('保存失败：','Save failed: ')+e.message,'err');}}
 async function loadBrightness(){
@@ -242,9 +312,11 @@ async function startOTA(){
 async function restart(){
   if(!confirm(tr("确定重启设备？","Restart the device?")))return;
   try{await fetch('/api/system/restart',{method:'POST'});msg('',tr("重启中…","Restarting..."),'info');}catch(e){}}
-async function loadInfo(){
-  try{var r=await fetch('/api/system/info');var d=await r.json();
-    if(d.success){var i=d.info;var b=document.getElementById('status-bar');
+async function loadInfo(timeoutMs){
+  var controller=new AbortController();var timeout=setTimeout(function(){controller.abort();},typeof timeoutMs==='number'?timeoutMs:6000);
+  try{var r=await fetch('/api/system/info',{cache:'no-store',signal:controller.signal});var d=await r.json();
+    if(!r.ok||!d.success)return null;
+    var i=d.info;currentWiFiInfo=i;currentWiFiInfoAt=Date.now();renderWiFiCurrent();renderScanNetworks();var b=document.getElementById('status-bar');
       if(i.eth_connected){b.className='status-bar ok';b.textContent=tr('有线网络: ','Ethernet: ')+i.ip;}
       else if(i.wifi_connected){b.className='status-bar ok';b.textContent=tr('WiFi 已连接: ','WiFi connected: ')+i.ip;}
       else{b.className='status-bar err';b.textContent=tr('未连接，请在下方配置 WiFi','Not connected — configure WiFi below');}
@@ -267,7 +339,9 @@ async function loadInfo(){
       /* Only a TAS58xx build registers /api/audio/dual; asking anyway logs a
          warning on the device for every page load. */
       if(i.dual_supported&&!dualLoaded){dualLoaded=true;loadDual();}
-      document.getElementById('dev-name').placeholder=i.device_name||'';}}catch(e){}}
+      document.getElementById('dev-name').placeholder=i.device_name||'';return i;
+  }catch(e){if(wifiConnecting){currentWiFiInfo=null;if(scannedNetworks)scannedNetworks.forEach(function(n){n.connected=false;});renderWiFiCurrent();renderScanNetworks();}return null;}
+  finally{clearTimeout(timeout);}}
 window.onload=function(){applyLanguage();document.getElementById('ui-language').onchange=function(){uiLanguage=this.value;localStorage.setItem('airplay-language',uiLanguage);applyLanguage();};
   document.getElementById('fw-file').onchange=function(e){var f=e.target.files[0];
     document.getElementById('fw-name').textContent=f?f.name:tr("未选择文件","No file selected");
