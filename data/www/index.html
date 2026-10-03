@@ -84,8 +84,8 @@ input:focus{outline:none;border-color:#e94560}
 <button class='btn btn-primary' onclick='saveName()' data-zh="保存名称" data-en="Save Name">保存名称</button>
 <div id='name-msg'></div>
 <div class='form-group' style='margin-top:18px'><label for='airplay-icon' data-zh='AirPlay 图标' data-en='AirPlay Icon'>AirPlay 图标</label>
-<select id='airplay-icon'><option value='0' data-zh='音箱 / HomePod mini（默认）' data-en='Speaker / HomePod mini (default)'>音箱 / HomePod mini（默认）</option><option value='1' data-zh='电视 / Apple TV' data-en='TV / Apple TV'>电视 / Apple TV</option></select></div>
-<p style='color:#888;font-size:12px' data-zh='通过设备型号提示图标；实际显示由 iOS/macOS 决定，保存后重启生效。' data-en='Advertises a model hint. iOS/macOS chooses the actual icon. Restart after saving.'>通过设备型号提示图标；实际显示由 iOS/macOS 决定，保存后重启生效。</p>
+<select id='airplay-icon'><option value='2' data-zh='通用音箱（类似 Sonos）' data-en='Generic speaker (like Sonos)'>通用音箱（类似 Sonos）</option><option value='0' data-zh='HomePod mini（原默认）' data-en='HomePod mini (original default)'>HomePod mini（原默认）</option><option value='1' data-zh='电视 / Apple TV' data-en='TV / Apple TV'>电视 / Apple TV</option></select></div>
+<p style='color:#888;font-size:12px' data-zh='通用音箱广播为第三方音箱；实际图案由 iOS/macOS 决定，保存后重启生效。' data-en='Generic speaker advertises a third-party speaker identity. iOS/macOS chooses the icon. Restart after saving.'>通用音箱广播为第三方音箱；实际图案由 iOS/macOS 决定，保存后重启生效。</p>
 <button class='btn btn-secondary' onclick='saveIcon()' data-zh='保存图标' data-en='Save Icon'>保存图标</button><div id='icon-msg'></div>
 <div class='form-group' style='margin-top:18px'><label for='led-brightness' data-zh="LED 亮度" data-en="LED Brightness">LED 亮度</label>
 <div class='slider-row'><input type='range' id='led-brightness' min='0' max='255' value='128' oninput='document.getElementById("led-pct").textContent=Math.round(this.value/255*100)+"%"'>
