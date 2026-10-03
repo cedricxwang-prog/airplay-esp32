@@ -1,7 +1,7 @@
 <!DOCTYPE html><html><head>
 <meta charset='UTF-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>AirPlay Receiver</title>
+<title data-zh="AirPlay 接收器" data-en="AirPlay Receiver">AirPlay 接收器</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,system-ui,sans-serif;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);min-height:100vh;padding:20px;color:#fff}
@@ -49,91 +49,107 @@ input:focus{outline:none;border-color:#e94560}
 .slider-row span{font-size:13px;color:#888;min-width:32px;text-align:right}
 </style></head><body>
 <div class='wrap'>
-<div class='header'><h1>AirPlay Receiver</h1><p>ESP32 Configuration Panel</p></div>
-<div id='status-bar' class='status-bar'>Loading...</div>
-<div class='card'><h2>WiFi Network</h2>
-<button class='btn btn-secondary' onclick='scanWiFi()'>Scan Networks</button>
+<div class='header'><h1>AirPlay Receiver</h1><p>by Cedric</p><select id='ui-language' aria-label='Language / 语言'><option value='zh'>中文</option><option value='en'>English</option></select><p data-zh="ESP32 配置面板" data-en="ESP32 Configuration Panel">ESP32 配置面板</p></div>
+<div id='status-bar' class='status-bar' data-zh="加载中…" data-en="Loading...">加载中…</div>
+<div class='card'><h2 data-zh="WiFi 网络" data-en="WiFi Network">WiFi 网络</h2>
+<div class='form-group'><label for='saved-wifi' data-zh='已保存的 WiFi' data-en='Saved WiFi'>已保存的 WiFi</label><select id='saved-wifi'></select></div>
+<button class='btn btn-secondary' id='saved-wifi-connect' onclick='connectSavedWiFi()' disabled data-zh='连接已保存的 WiFi' data-en='Connect to saved WiFi'>连接已保存的 WiFi</button>
+<button class='btn btn-secondary' onclick='scanWiFi()' data-zh="扫描网络" data-en="Scan Networks">扫描网络</button>
 <div id='wifi-list' class='wifi-list'></div>
-<div class='form-group'><label>Network Name (SSID)</label><input type='text' id='wifi-ssid' placeholder='Enter or select network'></div>
-<div class='form-group'><label>Password</label><input type='password' id='wifi-pass' placeholder='Enter password'></div>
-<button class='btn btn-primary btn-block' onclick='saveWiFi()'>Connect to WiFi</button>
+<div class='form-group'><label data-zh="网络名称" data-en="Network Name (SSID)">网络名称</label><input type='text' id='wifi-ssid' placeholder='输入或选择网络' data-placeholder-zh="输入或选择网络" data-placeholder-en="Enter or select network"></div>
+<div class='form-group'><label data-zh="密码" data-en="Password">密码</label><input type='password' id='wifi-pass' placeholder='输入密码' data-placeholder-zh="输入密码" data-placeholder-en="Enter password"></div>
+<button class='btn btn-primary btn-block' onclick='saveWiFi()' data-zh="连接 WiFi" data-en="Connect to WiFi">连接 WiFi</button>
 <div id='wifi-msg'></div></div>
-<div class='card'><h2>Device Settings</h2>
-<div class='form-group'><label>AirPlay Device Name</label><input type='text' id='dev-name' placeholder='My Speaker'></div>
-<button class='btn btn-primary' onclick='saveName()'>Save Name</button>
+<div class='card'><h2 data-zh="设备设置" data-en="Device Settings">设备设置</h2>
+<div class='form-group'><label data-zh="AirPlay 设备名称" data-en="AirPlay Device Name">AirPlay 设备名称</label><input type='text' id='dev-name' placeholder='我的音箱' data-placeholder-zh="我的音箱" data-placeholder-en="My Speaker"></div>
+<button class='btn btn-primary' onclick='saveName()' data-zh="保存名称" data-en="Save Name">保存名称</button>
 <div id='name-msg'></div>
-<div class='form-group' style='margin-top:18px'><label for='led-brightness'>LED Brightness</label>
+<div class='form-group' style='margin-top:18px'><label for='led-brightness' data-zh="LED 亮度" data-en="LED Brightness">LED 亮度</label>
 <div class='slider-row'><input type='range' id='led-brightness' min='0' max='255' value='128' oninput='document.getElementById("led-pct").textContent=Math.round(this.value/255*100)+"%"'>
 <span id='led-pct'>50%</span></div></div>
-<button class='btn btn-secondary' onclick='saveBrightness()'>Save Brightness</button>
+<button class='btn btn-secondary' onclick='saveBrightness()' data-zh="保存亮度" data-en="Save Brightness">保存亮度</button>
 <div id='brightness-msg'></div>
 <div id='chan-group'>
-<div class='form-group' style='margin-top:18px'><label for='chan-mode' id='chan-label'>Output Channel</label>
+<div class='form-group' style='margin-top:18px'><label for='chan-mode' id='chan-label' data-zh="输出声道" data-en="Output Channel">输出声道</label>
 <select id='chan-mode' onchange='saveChannel()'>
-<option value='0'>Stereo</option>
-<option value='1'>Left only</option>
-<option value='2'>Right only</option>
-<option value='3'>Mono (L+R)</option>
+<option value='0' data-zh="立体声" data-en="Stereo">立体声</option>
+<option value='1' data-zh="仅左声道" data-en="Left only">仅左声道</option>
+<option value='2' data-zh="仅右声道" data-en="Right only">仅右声道</option>
+<option value='3' data-zh="单声道" data-en="Mono (L+R)">单声道</option>
 </select></div>
 <div id='chan-msg'></div></div>
 <div id='dual-group' style='display:none;margin-top:18px'>
-<div class='form-group'><label for='dual-mode'>DAC Configuration</label>
+<div class='form-group'><label for='dual-mode' data-zh="DAC 配置" data-en="DAC Configuration">DAC 配置</label>
 <select id='dual-mode' onchange='saveDual()'>
-<option value='0'>2.1 (Satellites / Sub)</option>
-<option value='1'>Bi-Amp</option>
+<option value='0'>2.1 模式（卫星箱/低音炮）· 2.1 (Satellites / Sub)</option>
+<option value='1' data-zh="双功放" data-en="Bi-Amp">双功放</option>
 </select></div>
 <div id='dual-msg'></div></div>
 <div id='eq-link' style='display:none;margin-top:18px'>
-<a href='/eq' class='btn btn-secondary'>EQ Settings</a></div>
+<a href='/eq' class='btn btn-secondary' data-zh="均衡器设置" data-en="EQ Settings">均衡器设置</a></div>
 </div>
-<div class='card'><h2>Firmware Update</h2>
+<div class='card'><h2 data-zh="固件升级" data-en="Firmware Update">固件升级</h2>
 <div class='file-row'><input type='file' id='fw-file' accept='.bin' style='display:none'>
-<button class='btn btn-secondary' onclick='document.getElementById("fw-file").click()'>Choose File</button>
-<span class='file-name' id='fw-name'>No file selected</span></div>
-<button class='btn btn-primary btn-block' id='ota-btn' onclick='startOTA()' disabled>Upload Firmware</button>
+<button class='btn btn-secondary' onclick='document.getElementById("fw-file").click()' data-zh="选择文件" data-en="Choose File">选择文件</button>
+<span class='file-name' id='fw-name' data-zh="未选择文件" data-en="No file selected">未选择文件</span></div>
+<button class='btn btn-primary btn-block' id='ota-btn' onclick='startOTA()' disabled data-zh="上传固件" data-en="Upload Firmware">上传固件</button>
 <div id='ota-msg'></div></div>
-<div class='card'><h2>System</h2>
+<div class='card'><h2 data-zh="系统信息" data-en="System">系统信息</h2>
 <div class='info-grid'>
-<div class='info-item'><label>IP Address</label><span id='info-ip'>-</span></div>
-<div class='info-item'><label>MAC Address</label><span id='info-mac'>-</span></div>
-<div class='info-item'><label>Device Name</label><span id='info-name'>-</span></div>
-<div class='info-item'><label>Free Memory</label><span id='info-heap'>-</span></div>
-<div class='info-item'><label>Firmware</label><span id='info-fw'>-</span></div>
-<div class='info-item'><label>Uptime</label><span id='info-uptime'>-</span></div>
-<div class='info-item'><label>Last reset</label><span id='info-reset'>-</span></div>
-<div class='info-item'><label>WiFi SSID</label><span id='info-ssid'>-</span></div>
-<div class='info-item'><label>WiFi RSSI</label><span id='info-rssi'>-</span></div>
-<div class='info-item'><label>WiFi Channel</label><span id='info-chan'>-</span></div>
-<div class='info-item'><label>WiFi PHY</label><span id='info-phy'>-</span></div>
-<div class='info-item' style='grid-column:1/-1'><label>WiFi BSSID</label><span id='info-bssid'>-</span></div>
+<div class='info-item'><label data-zh="IP 地址" data-en="IP Address">IP 地址</label><span id='info-ip'>-</span></div>
+<div class='info-item'><label data-zh="MAC 地址" data-en="MAC Address">MAC 地址</label><span id='info-mac'>-</span></div>
+<div class='info-item'><label data-zh="设备名称" data-en="Device Name">设备名称</label><span id='info-name'>-</span></div>
+<div class='info-item'><label data-zh="可用内存" data-en="Free Memory">可用内存</label><span id='info-heap'>-</span></div>
+<div class='info-item'><label data-zh="固件版本" data-en="Firmware">固件版本</label><span id='info-fw'>-</span></div>
+<div class='info-item'><label data-zh="运行时间" data-en="Uptime">运行时间</label><span id='info-uptime'>-</span></div>
+<div class='info-item'><label data-zh="上次重启" data-en="Last reset">上次重启</label><span id='info-reset'>-</span></div>
+<div class='info-item'><label data-zh="WiFi 名称" data-en="WiFi SSID">WiFi 名称</label><span id='info-ssid'>-</span></div>
+<div class='info-item'><label data-zh="WiFi 信号" data-en="WiFi RSSI">WiFi 信号</label><span id='info-rssi'>-</span></div>
+<div class='info-item'><label data-zh="WiFi 信道" data-en="WiFi Channel">WiFi 信道</label><span id='info-chan'>-</span></div>
+<div class='info-item'><label data-zh="WiFi 模式" data-en="WiFi PHY">WiFi 模式</label><span id='info-phy'>-</span></div>
+<div class='info-item' style='grid-column:1/-1'><label data-zh="接入点 MAC" data-en="WiFi BSSID">接入点 MAC</label><span id='info-bssid'>-</span></div>
 </div>
-<div class='actions'><button class='btn btn-danger' onclick='restart()'>Restart Device</button></div>
+<div class='actions'><button class='btn btn-danger' onclick='restart()' data-zh="重启设备" data-en="Restart Device">重启设备</button></div>
 </div>
-<div class='card'><h2>System Logs</h2>
-<p style='color:#888;font-size:13px;margin-bottom:12px'>Live ESP log output via WebSocket</p>
-<a href='/logs' class='btn btn-primary'>Open Log Viewer</a></div>
-<div class='card'><h2>WiFi Speedtest</h2>
-<p style='color:#888;font-size:13px;margin-bottom:12px'>Measure latency and throughput to this device</p>
-<a href='/speedtest' class='btn btn-primary'>Open Speedtest</a></div>
+<div class='card'><h2 data-zh="系统日志" data-en="System Logs">系统日志</h2>
+<p style='color:#888;font-size:13px;margin-bottom:12px' data-zh="通过 WebSocket 实时查看 ESP 日志" data-en="Live ESP log output via WebSocket">通过 WebSocket 实时查看 ESP 日志</p>
+<a href='/logs' class='btn btn-primary' data-zh="打开日志" data-en="Open Log Viewer">打开日志</a></div>
+<div class='card'><h2 data-zh="WiFi 测速" data-en="WiFi Speedtest">WiFi 测速</h2>
+<p style='color:#888;font-size:13px;margin-bottom:12px' data-zh="测试到本设备的延迟与吞吐" data-en="Measure latency and throughput to this device">测试到本设备的延迟与吞吐</p>
+<a href='/speedtest' class='btn btn-primary' data-zh="开始测速" data-en="Open Speedtest">开始测速</a></div>
 </div>
 <script>
-function msg(id,txt,type){var e=document.getElementById(id);if(e){e.innerHTML='<div class="msg '+type+'">'+txt+'</div>';setTimeout(function(){e.innerHTML='';},4000);}}
+var uiLanguage=localStorage.getItem('airplay-language')==='en'?'en':'zh';
+function tr(zh,en){return uiLanguage==='en'?en:zh;}
+function applyLanguage(){
+ document.documentElement.lang=uiLanguage==='en'?'en':'zh-CN';
+ document.querySelectorAll('[data-zh]').forEach(function(e){e.textContent=e.dataset[uiLanguage];});
+ document.querySelectorAll('[data-placeholder-zh]').forEach(function(e){e.placeholder=e.dataset[uiLanguage==='en'?'placeholderEn':'placeholderZh'];});
+ document.getElementById('ui-language').value=uiLanguage;
+ applyChanLabels();renderSavedWiFi();loadInfo();
+}
+
+function msg(id,txt,type){var e=document.getElementById(id);if(e){e.replaceChildren();var box=document.createElement('div');box.className='msg '+type;box.textContent=txt;e.appendChild(box);setTimeout(function(){e.innerHTML='';},4000);}}
+var savedWiFi=[];
+function renderSavedWiFi(){var sel=document.getElementById('saved-wifi');var previous=sel.value;sel.replaceChildren();var placeholder=document.createElement('option');placeholder.value='';placeholder.textContent=savedWiFi.length?tr('请选择已保存的网络','Select a saved network'):tr('暂无已保存的网络','No saved networks');sel.appendChild(placeholder);savedWiFi.forEach(function(ssid){var opt=document.createElement('option');opt.value=ssid;opt.textContent=ssid;sel.appendChild(opt);});sel.value=previous;document.getElementById('saved-wifi-connect').disabled=!sel.value;sel.onchange=function(){document.getElementById('saved-wifi-connect').disabled=!this.value;};}
+async function loadSavedWiFi(){try{var r=await fetch('/api/wifi/saved');if(!r.ok)throw new Error('HTTP '+r.status);var d=await r.json();if(d.success){savedWiFi=d.networks;renderSavedWiFi();}}catch(e){msg('wifi-msg',tr('无法读取已保存网络','Could not load saved networks'),'err');}}
+async function connectSavedWiFi(){var ssid=document.getElementById('saved-wifi').value;if(!ssid)return;var btn=document.getElementById('saved-wifi-connect');btn.disabled=true;try{var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:ssid,use_saved:true})});var d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'HTTP '+r.status);msg('wifi-msg',tr('已选择，重启连接中…','Selected. Restarting to connect...'),'ok');}catch(e){msg('wifi-msg',tr('连接未确认：','Connection unconfirmed: ')+e.message,'err');btn.disabled=false;}}
 async function scanWiFi(){
-  var l=document.getElementById('wifi-list');l.innerHTML='<div class="msg info">Scanning...</div>';
+  var l=document.getElementById('wifi-list');l.innerHTML='<div class="msg info">'+tr('扫描中…','Scanning...')+'</div>';
   try{var r=await fetch('/api/wifi/scan');var d=await r.json();
     if(d.success&&d.networks.length>0){l.innerHTML='';d.networks.forEach(function(n){
       var i=document.createElement('div');i.className='wifi-item';
-      i.innerHTML='<span class="ssid">'+n.ssid+'</span><span class="rssi">'+n.rssi+' dBm</span>';
+      var ssid=document.createElement('span');ssid.className='ssid';ssid.textContent=n.ssid;var signal=document.createElement('span');signal.className='rssi';signal.textContent=n.rssi+' dBm';i.append(ssid,signal);
       i.onclick=function(){document.querySelectorAll('.wifi-item').forEach(function(x){x.classList.remove('sel');});i.classList.add('sel');document.getElementById('wifi-ssid').value=n.ssid;};
       l.appendChild(i);});}
-    else{l.innerHTML='<div class="msg info">No networks found</div>';}}
-  catch(e){l.innerHTML='<div class="msg err">Scan failed</div>';}}
+    else{l.innerHTML='<div class="msg info">'+tr('未发现网络','No networks found')+'</div>';}}
+  catch(e){l.innerHTML='<div class="msg err">'+tr('扫描失败','Scan failed')+'</div>';}}
 async function saveWiFi(){
   var s=document.getElementById('wifi-ssid').value.trim();var p=document.getElementById('wifi-pass').value;
-  if(!s){msg('wifi-msg','Enter network name','err');return;}
+  if(!s){msg('wifi-msg',tr("请输入网络名称","Enter network name"),'err');return;}
   try{var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:s,password:p})});
-    var d=await r.json();if(d.success){msg('wifi-msg','Saved! Restarting...','ok');}else{msg('wifi-msg',d.error,'err');}}
-  catch(e){msg('wifi-msg','Error','err');}}
+    var d=await r.json();if(d.success){msg('wifi-msg',tr("已保存！重启中…","Saved! Restarting..."),'ok');}else{msg('wifi-msg',d.error,'err');}}
+  catch(e){msg('wifi-msg',tr("错误","Error"),'err');}}
 async function loadBrightness(){
   try{var r=await fetch('/api/led/brightness');var d=await r.json();
     if(d.success){var s=document.getElementById('led-brightness');s.value=d.brightness;
@@ -142,8 +158,8 @@ async function loadBrightness(){
 async function saveBrightness(){
   var v=Number.parseInt(document.getElementById('led-brightness').value,10);
   try{var r=await fetch('/api/led/brightness',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({brightness:v})});
-    var d=await r.json();if(d.success){msg('brightness-msg','Saved!','ok');}else{msg('brightness-msg',d.error,'err');}}
-  catch(e){msg('brightness-msg','Error','err');console.error('saveBrightness failed',e);}}
+    var d=await r.json();if(d.success){msg('brightness-msg',tr("已保存！","Saved!"),'ok');}else{msg('brightness-msg',d.error,'err');}}
+  catch(e){msg('brightness-msg',tr("错误","Error"),'err');console.error('saveBrightness failed',e);}}
 async function loadChannel(){
   try{var r=await fetch('/api/audio/channel');var d=await r.json();
     if(d.success){document.getElementById('chan-mode').value=String(d.mode);
@@ -160,15 +176,16 @@ var chanDsp=false;
    is which input channel to feed it — there is no stereo to pass through. */
 function applyChanLabels(){
   document.getElementById('chan-label').textContent=
-    chanDsp?'Input Channel':'Output Channel';
+    chanDsp?tr("输入声道","Input Channel"):tr("输出声道","Output Channel");
   var o=document.getElementById('chan-mode').options;
-  o[0].text=chanDsp?'Both (L+R)/2':'Stereo';
-  o[3].text=chanDsp?'Both (L+R)/2':'Mono (L+R)';
+  o[0].text=chanDsp?tr("左右混合","Both (L+R)/2"):tr("立体声","Stereo");
+  o[3].text=chanDsp?tr("左右混合","Both (L+R)/2"):tr("单声道","Mono (L+R)");
 }
 var DUAL_WARN={
-  0:'Switch to 2.1 (Satellites / Sub)?\n\nThe second amplifier is reconfigured as PBTL mono: its OUT_A and OUT_B terminals must be bridged together and wired to a single subwoofer.\n\nRewire before restarting.',
-  1:'Switch to Bi-Amp?\n\nBoth amplifiers run as stereo BTL, with OUT_A driving the woofer and OUT_B the tweeter of one speaker.\n\nIf OUT_A and OUT_B are still bridged for a PBTL subwoofer you MUST unbridge them first — leaving them shorted drives the two outputs against each other and can damage the amplifier and its output filters.'
+  0:'切换到 2.1 模式（卫星箱/低音炮）？\nSwitch to 2.1 (Satellites / Sub)?\n\n第二路功放将被配置为 PBTL 单声道：OUT_A 与 OUT_B 端子必须桥接在一起并接到同一只低音炮。\n\n重启前请先重新接线。\n(The second amplifier is reconfigured as PBTL mono: OUT_A and OUT_B must be bridged together and wired to a single subwoofer. Rewire before restarting.)',
+  1:'切换到双功放（Bi-Amp）？\nSwitch to Bi-Amp?\n\n两路功放均以立体声 BTL 运行：OUT_A 驱动低音单元，OUT_B 驱动同一只音箱的高音单元。\n\n如果 OUT_A/OUT_B 目前仍是 PBTL 低音炮桥接，必须先拆除桥接，否则会损坏功放。\n(Both amplifiers run as stereo BTL. If OUT_A and OUT_B are still bridged for a PBTL subwoofer you MUST unbridge them first.)'
 };
+function dualWarning(v){return v===0?tr('切换到 2.1 模式？第二路功放将变为 PBTL 单声道，OUT_A 与 OUT_B 必须桥接到同一只低音炮。重启前请重新接线。','Switch to 2.1? The second amplifier becomes PBTL mono. Bridge OUT_A and OUT_B to one subwoofer. Rewire before restarting.'):tr('切换到双功放？OUT_A 驱动低音，OUT_B 驱动高音。若当前为 PBTL 桥接，必须先拆除桥接，避免损坏功放。','Switch to Bi-Amp? OUT_A drives the woofer; OUT_B drives the tweeter. Remove any PBTL bridge first to avoid amplifier damage.');}
 /* With two amps the DAC configuration already fixes the routing, so per-output
    channel selection has no meaning. */
 function applyAmpLayout(){
@@ -178,12 +195,12 @@ function applyAmpLayout(){
 async function saveChannel(){
   var v=Number.parseInt(document.getElementById('chan-mode').value,10);
   try{var r=await fetch('/api/audio/channel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:v})});
-    var d=await r.json();if(d.success){msg('chan-msg','Saved!','ok');
+    var d=await r.json();if(d.success){msg('chan-msg',tr("已保存！","Saved!"),'ok');
       /* The firmware may keep stereo regardless of what was asked for. */
       if(typeof d.mode==='number'){document.getElementById('chan-mode').value=String(d.mode);}
       chanLocked=!!d.locked;applyAmpLayout();}
     else{msg('chan-msg',d.error,'err');}}
-  catch(e){msg('chan-msg','Error','err');console.error('saveChannel failed',e);}}
+  catch(e){msg('chan-msg',tr("错误","Error"),'err');console.error('saveChannel failed',e);}}
 async function loadDual(){
   try{var r=await fetch('/api/audio/dual');if(!r.ok)return;var d=await r.json();
     if(d.success&&d.devices>1){dualDevices=d.devices;dualMode=d.mode;
@@ -191,50 +208,50 @@ async function loadDual(){
       sel.value=String(d.mode);
       if(!d.biamp){
         sel.querySelector('option[value="1"]').disabled=true;
-        sel.querySelector('option[value="1"]').textContent='Bi-Amp (unavailable)';
+        sel.querySelector('option[value="1"]').textContent=tr("双功放（不可用）","Bi-Amp (unavailable)");
       }
       document.getElementById('dual-group').style.display='';
-      if(d.restart_required){msg('dual-msg','Restart to apply the new wiring.','err');}}}
+      if(d.restart_required){msg('dual-msg',tr("重启后按新接线生效","Restart to apply the new wiring."),'err');}}}
   catch(e){console.warn('Could not load dual DAC mode',e);}
   applyAmpLayout();}
 async function saveDual(){
   var sel=document.getElementById('dual-mode');
   var v=Number.parseInt(sel.value,10);
-  if(v!==dualMode&&!confirm(DUAL_WARN[v])){sel.value=String(dualMode);return;}
+  if(v!==dualMode&&!confirm(dualWarning(v))){sel.value=String(dualMode);return;}
   try{var r=await fetch('/api/audio/dual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:v})});
     var d=await r.json();
-    if(d.success){dualMode=v;msg('dual-msg','Saved! Rewire the speakers, then restart to apply.','ok');}
+    if(d.success){dualMode=v;msg('dual-msg',tr("已保存！按新接线重连喇叭后重启","Saved! Rewire the speakers, then restart."),'ok');}
     else{sel.value=String(dualMode);msg('dual-msg',d.error,'err');}}
-  catch(e){sel.value=String(dualMode);msg('dual-msg','Error','err');console.error('saveDual failed',e);}}
+  catch(e){sel.value=String(dualMode);msg('dual-msg',tr("错误","Error"),'err');console.error('saveDual failed',e);}}
 async function saveName(){
-  var n=document.getElementById('dev-name').value.trim();if(!n){msg('name-msg','Enter a name','err');return;}
+  var n=document.getElementById('dev-name').value.trim();if(!n){msg('name-msg',tr("请输入名称","Enter a name"),'err');return;}
   try{var r=await fetch('/api/device/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
-    var d=await r.json();if(d.success){msg('name-msg','Saved! Restart to apply.','ok');loadInfo();}else{msg('name-msg',d.error,'err');}}
-  catch(e){msg('name-msg','Error','err');}}
+    var d=await r.json();if(d.success){msg('name-msg',tr("已保存！重启后生效","Saved! Restart to apply."),'ok');loadInfo();}else{msg('name-msg',d.error,'err');}}
+  catch(e){msg('name-msg',tr("错误","Error"),'err');}}
 async function startOTA(){
-  var f=document.getElementById('fw-file').files[0];if(!f){msg('ota-msg','Select a file','err');return;}
-  document.getElementById('ota-btn').disabled=true;msg('ota-msg','Uploading...','info');
-  try{await fetch('/api/ota/update',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});msg('ota-msg','Done! Rebooting...','ok');}
-  catch(e){msg('ota-msg','Rebooting...','ok');}}
+  var f=document.getElementById('fw-file').files[0];if(!f){msg('ota-msg',tr("请选择文件","Select a file"),'err');return;}
+  document.getElementById('ota-btn').disabled=true;msg('ota-msg',tr("上传中…","Uploading..."),'info');
+  try{var response=await fetch('/api/ota/update',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});if(!response.ok)throw new Error(await response.text());msg('ota-msg',tr("完成！设备重启中…","Done! Rebooting..."),'ok');}
+  catch(e){msg('ota-msg',tr('升级未确认：','Update unconfirmed: ')+e.message,'err');document.getElementById('ota-btn').disabled=false;}}
 async function restart(){
-  if(!confirm('Restart the device?'))return;
-  try{await fetch('/api/system/restart',{method:'POST'});msg('','Restarting...','info');}catch(e){}}
+  if(!confirm(tr("确定重启设备？","Restart the device?")))return;
+  try{await fetch('/api/system/restart',{method:'POST'});msg('',tr("重启中…","Restarting..."),'info');}catch(e){}}
 async function loadInfo(){
   try{var r=await fetch('/api/system/info');var d=await r.json();
     if(d.success){var i=d.info;var b=document.getElementById('status-bar');
-      if(i.eth_connected){b.className='status-bar ok';b.innerHTML='Ethernet: '+i.ip;}
-      else if(i.wifi_connected){b.className='status-bar ok';b.innerHTML='WiFi: '+i.ip;}
-      else{b.className='status-bar err';b.innerHTML='Not connected - Configure WiFi below';}
+      if(i.eth_connected){b.className='status-bar ok';b.textContent=tr('有线网络: ','Ethernet: ')+i.ip;}
+      else if(i.wifi_connected){b.className='status-bar ok';b.textContent=tr('WiFi 已连接: ','WiFi connected: ')+i.ip;}
+      else{b.className='status-bar err';b.textContent=tr('未连接，请在下方配置 WiFi','Not connected — configure WiFi below');}
       document.getElementById('info-ip').textContent=i.ip||'-';
       document.getElementById('info-mac').textContent=i.mac||'-';
       document.getElementById('info-name').textContent=i.device_name||'-';
       document.getElementById('info-heap').textContent=Math.round(i.free_heap/1024)+' KB';
-      document.getElementById('info-fw').textContent=i.firmware_version||'-';
+      document.getElementById('info-fw').textContent=i.firmware_version?i.firmware_version+' by cedric':'-';
       function fmtUptime(s){if(s==null)return '-';var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
         return (d?d+'d ':'')+(d||h?h+'h ':'')+m+'m '+(s%60)+'s';}
       document.getElementById('info-uptime').textContent=fmtUptime(i.uptime_s);
       document.getElementById('info-reset').textContent=i.reset_reason||'-';
-      function rssiLabel(r){if(r==null)return '-';var q='';if(r>=-55)q=' (excellent)';else if(r>=-65)q=' (good)';else if(r>=-75)q=' (fair)';else q=' (poor)';return r+' dBm'+q;}
+      function rssiLabel(r){if(r==null)return '-';var q='';if(r>=-55)q=tr(' (优秀)',' (excellent)');else if(r>=-65)q=tr(' (良好)',' (good)');else if(r>=-75)q=tr(' (一般)',' (fair)');else q=tr(' (较差)',' (poor)');return r+' dBm'+q;}
       document.getElementById('info-ssid').textContent=i.wifi_ssid||'-';
       document.getElementById('info-rssi').textContent=rssiLabel(i.wifi_rssi);
       document.getElementById('info-chan').textContent=i.wifi_channel||'-';
@@ -245,9 +262,9 @@ async function loadInfo(){
          warning on the device for every page load. */
       if(i.dual_supported&&!dualLoaded){dualLoaded=true;loadDual();}
       document.getElementById('dev-name').placeholder=i.device_name||'';}}catch(e){}}
-window.onload=function(){
+window.onload=function(){applyLanguage();document.getElementById('ui-language').onchange=function(){uiLanguage=this.value;localStorage.setItem('airplay-language',uiLanguage);applyLanguage();};
   document.getElementById('fw-file').onchange=function(e){var f=e.target.files[0];
-    document.getElementById('fw-name').textContent=f?f.name:'No file selected';
+    document.getElementById('fw-name').textContent=f?f.name:tr("未选择文件","No file selected");
     document.getElementById('ota-btn').disabled=!f;};
-  loadInfo();loadBrightness();loadChannel();setInterval(loadInfo,30000);};
+  loadSavedWiFi();loadInfo();loadBrightness();loadChannel();setInterval(loadInfo,30000);};
 </script></body></html>
