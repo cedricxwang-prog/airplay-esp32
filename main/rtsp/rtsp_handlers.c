@@ -30,6 +30,7 @@
 #include "rtsp_fairplay.h"
 #include "rtsp_rsa.h"
 #include "settings.h"
+#include "airplay_advertisement.h"
 #include "socket_utils.h"
 #include "tlv8.h"
 
@@ -567,8 +568,10 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
     // AirPlay v1 (RAOP) probes ask for /info?txtAirPlay&txtRAOP and expect a
     // text/parameters key-value body — a plist makes classic v1 clients give
     // up.  Values mirror the _raop._tcp TXT record in mdns_airplay.c.
-    if (strstr(req->path, "txtRAOP") != NULL ||
-        strstr(req->path, "txtAirPlay") != NULL) {
+    bool unified_txt = (features & (UINT64_C(1) << 26)) != 0;
+    if ((!unified_txt || !request_uses_rtsp(req)) &&
+        (strstr(req->path, "txtRAOP") != NULL ||
+         strstr(req->path, "txtAirPlay") != NULL)) {
       static char body[512];
       int n = snprintf(body, sizeof(body),
                        "txtvers=1\r\n"
@@ -586,15 +589,22 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
                        "vn=65537\r\n"
                        "vs=377.40.00\r\n"
                        "am=%s\r\n"
+                       "manufacturer=%s\r\n"
                        "deviceid=%s\r\n",
-                       settings_get_airplay_model(), device_id);
+                       settings_get_airplay_model(),
+                       settings_get_airplay_manufacturer(), device_id);
+      if (n < 0 || (size_t)n >= sizeof(body)) {
+        rtsp_send_http_response(socket, conn, 500, "Internal Error",
+                                "text/plain", "Info response too large", 23);
+        return;
+      }
       rtsp_send_http_response(socket, conn, 200, "OK", "text/parameters", body,
                               (size_t)(n > 0 ? n : 0));
       return;
     }
 
     if (request_uses_rtsp(req)) {
-      static uint8_t body[1024];
+      static uint8_t body[2048];
       size_t body_len =
           bplist_build_info_response(body, sizeof(body), device_id, device_name,
                                      pk, 32, features, protocol_version);
@@ -620,6 +630,7 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
     plist_dict_string(&p, "deviceid", device_id);
     plist_dict_uint(&p, "features", features);
     plist_dict_string(&p, "model", settings_get_airplay_model());
+    plist_dict_string(&p, "manufacturer", settings_get_airplay_manufacturer());
     plist_dict_string(&p, "protovers", "1.1");
     plist_dict_string(&p, "srcvers", "377.40.00");
     plist_dict_int(&p, "vv", protocol_version);
@@ -659,8 +670,48 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
     plist_dict_end(&p);
     plist_array_end(&p);
 
+    if (unified_txt) {
+      airplay_advertisement_t advertisement;
+      uint8_t txt[AIRPLAY_TXT_DATA_CAPACITY];
+      if (!airplay_advertisement_build(&advertisement, device_id, pk, 32,
+                                       features, settings_get_airplay_model(),
+                                       settings_get_airplay_manufacturer())) {
+        rtsp_send_http_response(socket, conn, 500, "Internal Error",
+                                "text/plain", "Invalid TXT snapshot", 20);
+        return;
+      }
+      const char *keys[] = {"txtAirPlay", "txtRAOP"};
+      const airplay_txt_item_t *items[] = {advertisement.airplay,
+                                          advertisement.raop};
+      const size_t counts[] = {advertisement.airplay_count,
+                               advertisement.raop_count};
+      for (size_t i = 0; i < 2; i++) {
+        size_t txt_len = airplay_txt_encode(txt, sizeof(txt), items[i], counts[i]);
+        /* plist_dict_data silently skips oversized data. Reserve its framing
+         * plus the closing dict/plist so an incomplete /info is never sent. */
+        size_t needed = strlen(keys[i]) + base64_encoded_length(txt_len) + 80;
+        if (!txt_len || p.size > p.capacity || needed >= p.capacity - p.size) {
+          rtsp_send_http_response(socket, conn, 500, "Internal Error",
+                                  "text/plain", "Info response too large", 23);
+          return;
+        }
+        size_t before = p.size;
+        plist_dict_data(&p, keys[i], txt, txt_len);
+        if (p.size <= before) {
+          rtsp_send_http_response(socket, conn, 500, "Internal Error",
+                                  "text/plain", "Info response too large", 23);
+          return;
+        }
+      }
+    }
+
     plist_dict_end(&p);
     size_t body_len = plist_end(&p);
+    if (body_len < 9 || memcmp(body + body_len - 9, "</plist>\n", 9) != 0) {
+      rtsp_send_http_response(socket, conn, 500, "Internal Error", "text/plain",
+                              "Info response too large", 23);
+      return;
+    }
 
     rtsp_send_http_response(socket, conn, 200, "OK", "text/x-apple-plist+xml",
                             body, body_len);
