@@ -62,5 +62,6 @@ with tempfile.TemporaryDirectory(prefix="cedric-wifi-profiles-") as directory:
     command = [os.environ.get("CC", "cc"), "-std=c11", "-I" + str(temp),
                "-Imain", "tests/host/test_wifi_profiles.c", "main/settings.c",
                "-o", str(binary)]
-    subprocess.run(command, cwd=ROOT, check=True)
-    subprocess.run([str(binary)], check=True)
+    for flags in ([], ["-DCONFIG_AIRPLAY_FORCE_V1=1"]):
+        subprocess.run(command + flags, cwd=ROOT, check=True)
+        subprocess.run([str(binary)], check=True)

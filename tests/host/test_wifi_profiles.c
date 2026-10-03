@@ -95,7 +95,66 @@ static void active_is(const char *ssid, const char *password) {
   assert(strcmp(secret, password) == 0);
   memset(secret, 0, sizeof(secret));
 }
+
+static void airplay_boot_is(unsigned icon) {
+  assert(strcmp(settings_get_airplay_model(),
+                settings_airplay_model_for_icon(icon)) == 0);
+#ifdef CONFIG_AIRPLAY_FORCE_V1
+  assert(settings_get_airplay_features_lo() == 0x005C4A00);
+#else
+  assert(settings_get_airplay_features_lo() ==
+         (icon == 2 ? 0x445C4A00 : 0x405C4A00));
+#endif
+  assert(strcmp(settings_get_airplay_manufacturer(), "Cedric") == 0);
+}
+
+static void test_airplay_presets(void) {
+  reset();
+  assert(settings_init() == ESP_OK);
+  assert(settings_get_airplay_icon() == 0);
+  airplay_boot_is(0);
+  assert(strcmp(settings_airplay_model_for_icon(0), "AudioAccessory5,1") == 0);
+  assert(strcmp(settings_airplay_model_for_icon(1), "AppleTV3,2") == 0);
+  assert(strcmp(settings_airplay_model_for_icon(2), "AirPlay-ESP32-Speaker") == 0);
+  assert(strcmp(settings_airplay_model_for_icon(3), "AudioAccessory5,1") == 0);
+
+  /* Saving a preset must not change live protocol model/features mid-session. */
+  assert(settings_set_airplay_icon(2) == ESP_OK);
+  assert(settings_get_airplay_icon() == 2);
+  airplay_boot_is(0);
+  assert(settings_init() == ESP_OK);
+  airplay_boot_is(2);
+  unsigned before = commits;
+  assert(settings_set_airplay_icon(3) == ESP_ERR_INVALID_ARG);
+  assert(settings_set_airplay_icon((unsigned)-1) == ESP_ERR_INVALID_ARG);
+  assert(commits == before);
+  assert(settings_get_airplay_icon() == 2);
+  airplay_boot_is(2);
+
+  /* Existing persisted mode values retain their exact meanings. */
+  assert(settings_set_airplay_icon(1) == ESP_OK);
+  assert(settings_get_airplay_icon() == 1);
+  airplay_boot_is(2);
+  assert(settings_init() == ESP_OK);
+  airplay_boot_is(1);
+  assert(settings_set_airplay_icon(0) == ESP_OK);
+  assert(settings_get_airplay_icon() == 0);
+  airplay_boot_is(1);
+  assert(settings_init() == ESP_OK);
+  airplay_boot_is(0);
+
+  assert(nvs_set_u8(1, "airplay_icon", 255) == ESP_OK);
+  assert(settings_init() == ESP_OK);
+  assert(settings_get_airplay_icon() == 0);
+  airplay_boot_is(0);
+  assert(nvs_erase_key(1, "airplay_icon") == ESP_OK);
+  assert(settings_init() == ESP_OK);
+  airplay_boot_is(0);
+  puts("PASS: AirPlay three presets, pending/reboot semantics, invalid modes, legacy modes and features");
+}
+
 int main(void) {
+  test_airplay_presets();
   char ssids[SETTINGS_WIFI_PROFILES][33];
   reset();
   assert(settings_list_wifi_profiles(ssids, SETTINGS_WIFI_PROFILES) == 0);
