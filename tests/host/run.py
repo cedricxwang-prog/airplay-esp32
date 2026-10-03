@@ -61,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix="cedric-audio-") as directory:
             assert info["model"] == model and info["manufacturer"] == "Cedric"
             assert info["deviceid"] == "00:11:22:33:44:55"
             assert info["pk"] == bytes(range(32))
-            expected_lo = 0x5C4A00 if force_v1 else 0x445C4A00 if mode == 2 else 0x405C4A00
+            expected_lo = 0x5C4A00 if force_v1 else 0x405C4A00
             expected_hi = 0 if force_v1 else 0x1C340
             assert info["features"] == (expected_hi << 32) | expected_lo
             assert info["vv"] == (1 if force_v1 else 2)
@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="cedric-audio-") as directory:
                     assert info["txtRAOP"] == Path(str(output) + ".raop.txt").read_bytes()
                     assert parse_txt(info["txtAirPlay"]) == airplay
                     assert parse_txt(info["txtRAOP"]) == raop
-                    assert info["features"] & (1 << 26)
+                    assert not info["features"] & (1 << 26)
                     extended = plistlib.loads(Path(str(output) + ".extended.plist").read_bytes())
                     assert len(extended["txtAirPlay"]) > 255
                     assert parse_txt(extended["txtAirPlay"])["deviceid"] == "d" * 64

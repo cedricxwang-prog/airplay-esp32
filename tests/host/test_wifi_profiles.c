@@ -103,7 +103,7 @@ static void airplay_boot_is(unsigned icon) {
   assert(settings_get_airplay_features_lo() == 0x005C4A00);
 #else
   assert(settings_get_airplay_features_lo() ==
-         (icon == 2 ? 0x445C4A00 : 0x405C4A00));
+         0x405C4A00);
 #endif
   assert(strcmp(settings_get_airplay_manufacturer(), "Cedric") == 0);
 }

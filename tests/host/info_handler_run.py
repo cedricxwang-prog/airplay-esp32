@@ -57,7 +57,7 @@ uint32_t settings_get_airplay_features_lo(void){
 #ifdef CONFIG_AIRPLAY_FORCE_V1
  return 0x5C4A00;
 #else
- return mode==2?0x445C4A00:0x405C4A00;
+ return 0x405C4A00;
 #endif
 }
 esp_err_t settings_get_device_name(char *name,size_t size){snprintf(name,size,"%s","1234567890123456789012345678901234567890123456789012345678901234");return 0;}
@@ -109,11 +109,10 @@ with tempfile.TemporaryDirectory(prefix='cedric-info-review-') as d:
                     target=tmp/'response'
                     result=subprocess.run([str(binary),str(mode),protocol,path,str(target)],check=True,capture_output=True,text=True)
                     payload=target.read_bytes()
-                    # Golden routing expectation catches an accidental plist response
-                    # to classic HTTP query probes, including generic-speaker mode.
+                    # Query probes keep the legacy text response for every
+                    # preset and transport; ordinary /info remains unchanged.
                     is_query = '?' in path
-                    unified_rtsp = mode == 2 and not v1 and protocol == 'RTSP/1.0'
-                    if is_query and not unified_rtsp:
+                    if is_query:
                         expected_type = 'text/parameters'
                     elif protocol == 'HTTP/1.1':
                         expected_type = 'text/x-apple-plist+xml'
@@ -127,13 +126,13 @@ with tempfile.TemporaryDirectory(prefix='cedric-info-review-') as d:
                         expected_model=('AudioAccessory5,1','AppleTV3,2','AirPlay-ESP32-Speaker')[mode]
                         assert info['model']==expected_model
                         assert info['manufacturer']=='Cedric'
-                        assert info['features']==(0x5C4A00 if v1 else (0x1C340<<32)|(0x445C4A00 if mode==2 else 0x405C4A00))
-                        assert not info['features'] & (1<<51)
+                        assert info['features']==(0x5C4A00 if v1 else (0x1C340<<32)|0x405C4A00)
+                        assert not info['features'] & ((1<<26)|(1<<51))
                         if mode==2 and not v1:
                             ap=txt_decode(info['txtAirPlay']);raop=txt_decode(info['txtRAOP'])
                             assert ap['model']==expected_model and raop['am']==expected_model
                             assert ap['manufacturer']==raop['manufacturer']=='Cedric'
-                            assert ap['features']==raop['ft']=='0x445C4A00,0x1C340'
+                            assert ap['features']==raop['ft']=='0x405C4A00,0x1C340'
                             assert ap['pk']==raop['pk']=='00'*32
                             assert ap['deviceid']==info.get('deviceid',info.get('deviceID'))
                             row['txt_lengths']=[len(info['txtAirPlay']),len(info['txtRAOP'])]
@@ -147,6 +146,6 @@ with tempfile.TemporaryDirectory(prefix='cedric-info-review-') as d:
     generic_binary = next(row for row in all_results if not row['v1'] and row['mode'] == 2
                           and row['protocol'] == 'RTSP/1.0' and row['path'] == '/info')
     print('PASS: actual /info handler, 24 HTTP/RTSP plain/query cases across 3 presets and v1/v2')
-    print('PASS: generic XML and binary plist parse; model/manufacturer/features/TXT agree; MFi stays disabled')
+    print('PASS: generic XML and binary plist parse; model/manufacturer/features/TXT agree; no extra authentication bits are advertised; Apple playback requires a separate live test')
     print('Sizes: ' + generic_xml['response'] + '; ' + generic_binary['response']
           + '; DNS TXT ' + '/'.join(map(str, generic_binary['txt_lengths'])) + ' bytes')

@@ -28,7 +28,7 @@ uint32_t settings_get_airplay_features_lo(void) {
 #ifdef CONFIG_AIRPLAY_FORCE_V1
   return 0x5C4A00;
 #else
-  return mode == 2 ? 0x445C4A00 : 0x405C4A00;
+  return 0x405C4A00;
 #endif
 }
 esp_err_t settings_get_device_name(char *name, size_t capacity) {
@@ -92,6 +92,11 @@ static void check_info_capacity(const char *name, uint64_t features,
 
 int main(int argc, char **argv) {
   assert(argc == 3); mode = (unsigned)atoi(argv[1]); assert(mode <= 2);
+  assert(!airplay_info_has_txt(0, "AirPlay-ESP32-Speaker"));
+  assert(!airplay_info_has_txt(UINT64_C(1) << 26, "AirPlay-ESP32-Speaker"));
+  assert(!airplay_info_has_txt(UINT64_C(1) << 30, NULL));
+  assert(!airplay_info_has_txt(UINT64_C(1) << 30, "AudioAccessory5,1"));
+  assert(airplay_info_has_txt(UINT64_C(1) << 30, "AirPlay-ESP32-Speaker"));
   for (size_t i = 0; i < sizeof(pk); i++) pk[i] = (uint8_t)i;
   mdns_airplay_init();
   assert(raop_size > 0);
@@ -114,7 +119,7 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof(path), "%s.raop.txt", argv[2]);
   save(path, advertised_raop, raop_size);
 
-  if (features & (UINT64_C(1) << 26)) {
+  if (airplay_info_has_txt(features, settings_get_airplay_model())) {
     /* A longer valid TXT value forces bplist data's two-byte length form. */
     char long_id[65]; memset(long_id, 'd', sizeof(long_id) - 1);
     long_id[sizeof(long_id) - 1] = 0;
