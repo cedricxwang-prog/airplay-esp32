@@ -50,3 +50,9 @@ CONFIG_I2S_GND_IO=14
 # CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
 #
 # See components/display/README.md for full setup instructions.
+
+# Buffered AirPlay 2 late-frame tolerance. Wider tolerance reduces drops
+# during WiFi bursts, but can temporarily retain a larger timing error.
+# Startup uses a strict half-frame release window; long-run precision
+# depends on the network clock, output pipeline and drift servo.
+CONFIG_AIRPLAY_TIMING_THRESHOLD_MS=80
