@@ -317,6 +317,40 @@ static esp_err_t wifi_config_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+static esp_err_t device_icon_handler(httpd_req_t *req) {
+  esp_err_t err = ESP_OK;
+  if (req->method == HTTP_POST) {
+    char body[64];
+    if (req->content_len == 0 || req->content_len >= sizeof(body)) {
+      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid icon request"); return ESP_FAIL;
+    }
+    size_t total = 0;
+    while (total < req->content_len) {
+      int n = httpd_req_recv(req, body + total, req->content_len - total);
+      if (n <= 0) { httpd_resp_send_500(req); return ESP_FAIL; }
+      total += (size_t)n;
+    }
+    body[total] = 0;
+    cJSON *json = cJSON_Parse(body);
+    cJSON *mode = json ? cJSON_GetObjectItem(json, "mode") : NULL;
+    if (!cJSON_IsNumber(mode) || (mode->valuedouble != 0 && mode->valuedouble != 1))
+      err = ESP_ERR_INVALID_ARG;
+    else err = settings_set_airplay_icon((unsigned)mode->valueint);
+    cJSON_Delete(json);
+  }
+  unsigned mode = settings_get_airplay_icon();
+  const char *model = mode == 1 ? "AppleTV3,2" : "AudioAccessory5,1";
+  cJSON *response = cJSON_CreateObject();
+  cJSON_AddBoolToObject(response, "success", err == ESP_OK);
+  cJSON_AddNumberToObject(response, "mode", mode);
+  cJSON_AddBoolToObject(response, "restart_required", strcmp(model, settings_get_airplay_model()) != 0);
+  if (err != ESP_OK) cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
+  char *text = cJSON_PrintUnformatted(response);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
+  free(text); cJSON_Delete(response); return ESP_OK;
+}
+
 static esp_err_t device_name_handler(httpd_req_t *req) {
   char content[256];
   int ret = httpd_req_recv(req, content, sizeof(content) - 1);
@@ -1322,7 +1356,7 @@ esp_err_t web_server_start(uint16_t port) {
 #endif
   config.lru_purge_enable = true; // Reclaim stale sockets when all are in use
   config.max_uri_handlers =
-      32; // Room for captive portal + EQ + speedtest + brightness + channel
+      34; // Room for captive portal + EQ + speedtest + brightness + channel
 #ifdef DAC_HAS_SUB_OFFSET
   config.max_uri_handlers += 2; // sub level get/post
 #endif
@@ -1377,6 +1411,10 @@ esp_err_t web_server_start(uint16_t port) {
                                .handler = wifi_scan_handler};
   httpd_register_uri_handler(s_server, &wifi_scan_uri);
 
+  httpd_uri_t icon_get_uri = {.uri = "/api/device/icon", .method = HTTP_GET, .handler = device_icon_handler};
+  httpd_register_uri_handler(s_server, &icon_get_uri);
+  httpd_uri_t icon_post_uri = {.uri = "/api/device/icon", .method = HTTP_POST, .handler = device_icon_handler};
+  httpd_register_uri_handler(s_server, &icon_post_uri);
   httpd_uri_t wifi_saved_uri = {.uri = "/api/wifi/saved", .method = HTTP_GET,
                                 .handler = wifi_saved_handler};
   httpd_register_uri_handler(s_server, &wifi_saved_uri);

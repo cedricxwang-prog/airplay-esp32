@@ -43,7 +43,7 @@ static const char *TAG = "mdns_airplay";
 
 // Model identifier - AudioAccessory for speaker appearance
 // AppleTV3,2 = Apple TV, AudioAccessory5,1 = HomePod mini (speaker)
-#define AIRPLAY_MODEL "AudioAccessory5,1"
+#define AIRPLAY_MODEL settings_get_airplay_model()
 
 void mdns_airplay_init(void) {
   char mac_str[18];
