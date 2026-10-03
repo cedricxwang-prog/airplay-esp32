@@ -2,6 +2,7 @@
 
 #include "audio_stream.h"
 #include "plist.h"
+#include "settings.h"
 
 static bool bplist_has_room(size_t pos, size_t need, size_t capacity) {
   return pos <= capacity && need <= capacity - pos;
@@ -492,7 +493,7 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     return 0;
   }
   ADD_OFFSET(); // 5: model
-  if (!bplist_write_ascii_string(out, capacity, &pos, "AudioAccessory5,1")) {
+  if (!bplist_write_ascii_string(out, capacity, &pos, settings_get_airplay_model())) {
     return 0;
   }
   ADD_OFFSET(); // 6: "protovers"
