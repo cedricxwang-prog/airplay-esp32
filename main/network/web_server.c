@@ -396,20 +396,25 @@ static esp_err_t device_icon_handler(httpd_req_t *req) {
     body[total] = 0;
     cJSON *json = cJSON_Parse(body);
     cJSON *mode = json ? cJSON_GetObjectItem(json, "mode") : NULL;
-    if (!cJSON_IsNumber(mode) || (mode->valuedouble != 0 && mode->valuedouble != 1))
+    if (!cJSON_IsNumber(mode) || mode->valuedouble < 0 ||
+        mode->valuedouble >= SETTINGS_AIRPLAY_ICON_COUNT ||
+        mode->valuedouble != mode->valueint)
       err = ESP_ERR_INVALID_ARG;
     else err = settings_set_airplay_icon((unsigned)mode->valueint);
     cJSON_Delete(json);
   }
   unsigned mode = settings_get_airplay_icon();
-  const char *model = mode == 1 ? "AppleTV3,2" : "AudioAccessory5,1";
+  const char *model = settings_airplay_model_for_icon(mode);
   cJSON *response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "success", err == ESP_OK);
   cJSON_AddNumberToObject(response, "mode", mode);
+  cJSON_AddStringToObject(response, "model", model);
+  cJSON_AddStringToObject(response, "active_model", settings_get_airplay_model());
   cJSON_AddBoolToObject(response, "restart_required", strcmp(model, settings_get_airplay_model()) != 0);
   if (err != ESP_OK) cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
   char *text = cJSON_PrintUnformatted(response);
   httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_send(req, text, HTTPD_RESP_USE_STRLEN);
   free(text); cJSON_Delete(response); return ESP_OK;
 }

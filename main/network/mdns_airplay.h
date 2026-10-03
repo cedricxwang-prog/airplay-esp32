@@ -1,5 +1,7 @@
 #pragma once
 
+#include "airplay_advertisement.h"
+
 /**
  * Initialize mDNS and advertise AirPlay 2 services
  *
