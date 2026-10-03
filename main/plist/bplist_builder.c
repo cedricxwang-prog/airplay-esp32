@@ -3,6 +3,7 @@
 #include "audio_stream.h"
 #include "plist.h"
 #include "settings.h"
+#include "airplay_advertisement.h"
 
 static bool bplist_has_room(size_t pos, size_t need, size_t capacity) {
   return pos <= capacity && need <= capacity - pos;
@@ -28,24 +29,128 @@ static bool bplist_write_length(uint8_t *out, size_t capacity, size_t *pos,
     out[(*pos)++] = marker_base | (uint8_t)length;
     return true;
   }
-  if (length > UINT8_MAX || !bplist_has_room(*pos, 3, capacity)) {
+  size_t length_bytes = length <= UINT8_MAX ? 1 : 2;
+  if (length > UINT16_MAX ||
+      !bplist_has_room(*pos, 2 + length_bytes, capacity)) {
     return false;
   }
   out[(*pos)++] = marker_base | 0x0F;
-  out[(*pos)++] = 0x10;
+  out[(*pos)++] = length_bytes == 1 ? 0x10 : 0x11;
+  if (length_bytes == 2) {
+    out[(*pos)++] = (uint8_t)(length >> 8);
+  }
   out[(*pos)++] = (uint8_t)length;
   return true;
 }
 
-static bool bplist_write_ascii_string(uint8_t *out, size_t capacity,
-                                      size_t *pos, const char *value) {
-  size_t len = strlen(value);
-  if (!bplist_write_length(out, capacity, pos, 0x50, len) ||
-      !bplist_has_room(*pos, len, capacity)) {
+/* Read one Unicode scalar without accepting overlong encodings, surrogate
+ * code points, invalid continuation bytes, or truncated UTF-8. */
+static bool bplist_read_utf8(const uint8_t *value, size_t length, size_t *pos,
+                              uint32_t *scalar) {
+  if (*pos >= length) {
     return false;
   }
-  memcpy(out + *pos, value, len);
-  *pos += len;
+  uint8_t first = value[*pos];
+  size_t bytes;
+  uint32_t minimum;
+  if (first < 0x80) {
+    bytes = 1;
+    minimum = 0;
+    *scalar = first;
+  } else if (first >= 0xC2 && first <= 0xDF) {
+    bytes = 2;
+    minimum = 0x80;
+    *scalar = first & 0x1F;
+  } else if (first >= 0xE0 && first <= 0xEF) {
+    bytes = 3;
+    minimum = 0x800;
+    *scalar = first & 0x0F;
+  } else if (first >= 0xF0 && first <= 0xF4) {
+    bytes = 4;
+    minimum = 0x10000;
+    *scalar = first & 0x07;
+  } else {
+    return false;
+  }
+  if (bytes > length - *pos) {
+    return false;
+  }
+  for (size_t i = 1; i < bytes; i++) {
+    uint8_t continuation = value[*pos + i];
+    if ((continuation & 0xC0) != 0x80) {
+      return false;
+    }
+    *scalar = (*scalar << 6) | (continuation & 0x3F);
+  }
+  if (*scalar < minimum || *scalar > 0x10FFFF ||
+      (*scalar >= 0xD800 && *scalar <= 0xDFFF)) {
+    return false;
+  }
+  *pos += bytes;
+  return true;
+}
+
+static bool bplist_write_string(uint8_t *out, size_t capacity,
+                                 size_t *pos, const char *value) {
+  if (!value) {
+    return false;
+  }
+  size_t length = strlen(value);
+  const uint8_t *utf8 = (const uint8_t *)value;
+  bool ascii = true;
+  for (size_t i = 0; i < length; i++) {
+    if (utf8[i] >= 0x80) {
+      ascii = false;
+      break;
+    }
+  }
+  if (ascii) {
+    if (!bplist_write_length(out, capacity, pos, 0x50, length) ||
+        !bplist_has_room(*pos, length, capacity)) {
+      return false;
+    }
+    memcpy(out + *pos, value, length);
+    *pos += length;
+    return true;
+  }
+
+  size_t input_pos = 0;
+  size_t units = 0;
+  uint32_t scalar;
+  while (input_pos < length) {
+    if (!bplist_read_utf8(utf8, length, &input_pos, &scalar)) {
+      return false;
+    }
+    size_t needed = scalar > 0xFFFF ? 2 : 1;
+    if (units > UINT16_MAX - needed) {
+      return false;
+    }
+    units += needed;
+  }
+  /* A binary plist Unicode string stores UTF-16BE and counts 16-bit code
+   * units, including both units of a non-BMP surrogate pair. */
+  if (!bplist_write_length(out, capacity, pos, 0x60, units) ||
+      !bplist_has_room(*pos, units * 2, capacity)) {
+    return false;
+  }
+  input_pos = 0;
+  while (input_pos < length) {
+    if (!bplist_read_utf8(utf8, length, &input_pos, &scalar)) {
+      return false;
+    }
+    if (scalar > 0xFFFF) {
+      scalar -= 0x10000;
+      uint16_t high = (uint16_t)(0xD800 | (scalar >> 10));
+      uint16_t low = (uint16_t)(0xDC00 | (scalar & 0x3FF));
+      out[(*pos)++] = (uint8_t)(high >> 8);
+      out[(*pos)++] = (uint8_t)high;
+      out[(*pos)++] = (uint8_t)(low >> 8);
+      out[(*pos)++] = (uint8_t)low;
+    } else {
+      out[(*pos)++] = (uint8_t)(scalar >> 8);
+      out[(*pos)++] = (uint8_t)scalar;
+    }
+  }
   return true;
 }
 
@@ -455,7 +560,8 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
   }
 
   size_t pos = 0;
-  size_t offsets[39];
+  size_t offsets[45];
+  bool include_txt = (features & (UINT64_C(1) << 26)) != 0;
   size_t obj = 0;
 
 #define ADD_OFFSET()                                   \
@@ -473,15 +579,15 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
   pos += 8;
 
   ADD_OFFSET(); // 0: "deviceid"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "deviceid")) {
+  if (!bplist_write_string(out, capacity, &pos, "deviceid")) {
     return 0;
   }
   ADD_OFFSET(); // 1: device id
-  if (!bplist_write_ascii_string(out, capacity, &pos, device_id)) {
+  if (!bplist_write_string(out, capacity, &pos, device_id)) {
     return 0;
   }
   ADD_OFFSET(); // 2: "features"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "features")) {
+  if (!bplist_write_string(out, capacity, &pos, "features")) {
     return 0;
   }
   ADD_OFFSET(); // 3: features
@@ -489,31 +595,31 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     return 0;
   }
   ADD_OFFSET(); // 4: "model"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "model")) {
+  if (!bplist_write_string(out, capacity, &pos, "model")) {
     return 0;
   }
   ADD_OFFSET(); // 5: model
-  if (!bplist_write_ascii_string(out, capacity, &pos, settings_get_airplay_model())) {
+  if (!bplist_write_string(out, capacity, &pos, settings_get_airplay_model())) {
     return 0;
   }
   ADD_OFFSET(); // 6: "protovers"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "protovers")) {
+  if (!bplist_write_string(out, capacity, &pos, "protovers")) {
     return 0;
   }
   ADD_OFFSET(); // 7: protocol version string
-  if (!bplist_write_ascii_string(out, capacity, &pos, "1.1")) {
+  if (!bplist_write_string(out, capacity, &pos, "1.1")) {
     return 0;
   }
   ADD_OFFSET(); // 8: "srcvers"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "srcvers")) {
+  if (!bplist_write_string(out, capacity, &pos, "srcvers")) {
     return 0;
   }
   ADD_OFFSET(); // 9: source version string
-  if (!bplist_write_ascii_string(out, capacity, &pos, "377.40.00")) {
+  if (!bplist_write_string(out, capacity, &pos, "377.40.00")) {
     return 0;
   }
   ADD_OFFSET(); // 10: "vv"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "vv")) {
+  if (!bplist_write_string(out, capacity, &pos, "vv")) {
     return 0;
   }
   ADD_OFFSET(); // 11: vv value
@@ -521,7 +627,7 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     return 0;
   }
   ADD_OFFSET(); // 12: "statusFlags"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "statusFlags")) {
+  if (!bplist_write_string(out, capacity, &pos, "statusFlags")) {
     return 0;
   }
   ADD_OFFSET(); // 13: statusFlags value
@@ -529,7 +635,7 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     return 0;
   }
   ADD_OFFSET(); // 14: "pk"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "pk")) {
+  if (!bplist_write_string(out, capacity, &pos, "pk")) {
     return 0;
   }
   ADD_OFFSET(); // 15: public key
@@ -537,36 +643,36 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     return 0;
   }
   ADD_OFFSET(); // 16: "pi"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "pi")) {
+  if (!bplist_write_string(out, capacity, &pos, "pi")) {
     return 0;
   }
   ADD_OFFSET(); // 17: pairing identifier
-  if (!bplist_write_ascii_string(out, capacity, &pos,
+  if (!bplist_write_string(out, capacity, &pos,
                                  "00000000-0000-0000-0000-000000000000")) {
     return 0;
   }
   ADD_OFFSET(); // 18: "name"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "name")) {
+  if (!bplist_write_string(out, capacity, &pos, "name")) {
     return 0;
   }
   ADD_OFFSET(); // 19: device name
-  if (!bplist_write_ascii_string(out, capacity, &pos, device_name)) {
+  if (!bplist_write_string(out, capacity, &pos, device_name)) {
     return 0;
   }
   ADD_OFFSET(); // 20: "audioFormats"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "audioFormats")) {
+  if (!bplist_write_string(out, capacity, &pos, "audioFormats")) {
     return 0;
   }
   ADD_OFFSET(); // 21: "type"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "type")) {
+  if (!bplist_write_string(out, capacity, &pos, "type")) {
     return 0;
   }
   ADD_OFFSET(); // 22: "audioInputFormats"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "audioInputFormats")) {
+  if (!bplist_write_string(out, capacity, &pos, "audioInputFormats")) {
     return 0;
   }
   ADD_OFFSET(); // 23: "audioOutputFormats"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "audioOutputFormats")) {
+  if (!bplist_write_string(out, capacity, &pos, "audioOutputFormats")) {
     return 0;
   }
   ADD_OFFSET(); // 24: stream type 96
@@ -593,19 +699,19 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
     }
   }
   ADD_OFFSET(); // 28: "audioLatencies"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "audioLatencies")) {
+  if (!bplist_write_string(out, capacity, &pos, "audioLatencies")) {
     return 0;
   }
   ADD_OFFSET(); // 29: "audioType"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "audioType")) {
+  if (!bplist_write_string(out, capacity, &pos, "audioType")) {
     return 0;
   }
   ADD_OFFSET(); // 30: "inputLatencyMicros"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "inputLatencyMicros")) {
+  if (!bplist_write_string(out, capacity, &pos, "inputLatencyMicros")) {
     return 0;
   }
   ADD_OFFSET(); // 31: "outputLatencyMicros"
-  if (!bplist_write_ascii_string(out, capacity, &pos, "outputLatencyMicros")) {
+  if (!bplist_write_string(out, capacity, &pos, "outputLatencyMicros")) {
     return 0;
   }
   ADD_OFFSET(); // 32: stream type 103
@@ -643,19 +749,60 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
       return 0;
     }
   }
-  ADD_OFFSET(); // 38: top-level info dict
+  ADD_OFFSET(); // 38: "manufacturer"
+  if (!bplist_write_string(out, capacity, &pos, "manufacturer")) {
+    return 0;
+  }
+  ADD_OFFSET(); // 39: manufacturer value
+  if (!bplist_write_string(out, capacity, &pos,
+                                 settings_get_airplay_manufacturer())) {
+    return 0;
+  }
+  if (include_txt) {
+    airplay_advertisement_t advertisement;
+    uint8_t txt[AIRPLAY_TXT_DATA_CAPACITY];
+    if (!airplay_advertisement_build(&advertisement, device_id, public_key,
+                                     public_key_len, features,
+                                     settings_get_airplay_model(),
+                                     settings_get_airplay_manufacturer())) {
+      return 0;
+    }
+    ADD_OFFSET(); // 40: "txtAirPlay"
+    if (!bplist_write_string(out, capacity, &pos, "txtAirPlay")) {
+      return 0;
+    }
+    size_t txt_len = airplay_txt_encode(txt, sizeof(txt), advertisement.airplay,
+                                       advertisement.airplay_count);
+    ADD_OFFSET(); // 41: AirPlay DNS TXT data
+    if (!txt_len || !bplist_write_data(out, capacity, &pos, txt, txt_len)) {
+      return 0;
+    }
+    ADD_OFFSET(); // 42: "txtRAOP"
+    if (!bplist_write_string(out, capacity, &pos, "txtRAOP")) {
+      return 0;
+    }
+    txt_len = airplay_txt_encode(txt, sizeof(txt), advertisement.raop,
+                                advertisement.raop_count);
+    ADD_OFFSET(); // 43: RAOP DNS TXT data
+    if (!txt_len || !bplist_write_data(out, capacity, &pos, txt, txt_len)) {
+      return 0;
+    }
+  }
+  size_t top_object = obj;
+  ADD_OFFSET(); // 40 (legacy) or 44 (unified TXT): top-level info dict
   {
-    const uint8_t keys[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 28};
-    const uint8_t values[] = {1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 27, 37};
-    if (!bplist_write_dict(out, capacity, &pos, keys, values, 12)) {
+    const uint8_t keys[] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 28, 38, 40, 42};
+    const uint8_t values[] = {1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 27, 37, 39, 41, 43};
+    if (!bplist_write_dict(out, capacity, &pos, keys, values,
+                           include_txt ? 15 : 13)) {
       return 0;
     }
   }
 
 #undef ADD_OFFSET
 
-  if (obj != sizeof(offsets) / sizeof(offsets[0]) ||
-      !bplist_finish(out, capacity, &pos, offsets, obj, 38)) {
+  if (obj != (include_txt ? 45 : 41) ||
+      !bplist_finish(out, capacity, &pos, offsets, obj, top_object)) {
     return 0;
   }
 
