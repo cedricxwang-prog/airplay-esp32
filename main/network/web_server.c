@@ -251,6 +251,20 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+static esp_err_t wifi_saved_handler(httpd_req_t *req) {
+  char ssids[SETTINGS_WIFI_PROFILES][33];
+  size_t count = settings_list_wifi_profiles(ssids, SETTINGS_WIFI_PROFILES);
+  cJSON *json = cJSON_CreateObject();
+  cJSON_AddBoolToObject(json, "success", true);
+  cJSON *networks = cJSON_AddArrayToObject(json, "networks");
+  for (size_t i = 0; i < count; i++) cJSON_AddItemToArray(networks, cJSON_CreateString(ssids[i]));
+  char *body = cJSON_PrintUnformatted(json);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  esp_err_t err = httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+  free(body); cJSON_Delete(json); return err;
+}
+
 static esp_err_t wifi_config_handler(httpd_req_t *req) {
   char content[512];
   int ret = httpd_req_recv(req, content, sizeof(content) - 1);
@@ -276,13 +290,13 @@ static esp_err_t wifi_config_handler(httpd_req_t *req) {
                                ? cJSON_GetStringValue(password_json)
                                : "";
 
-    esp_err_t err = settings_set_wifi_credentials(ssid, password);
+    bool use_saved = cJSON_IsTrue(cJSON_GetObjectItem(json, "use_saved"));
+    esp_err_t err = use_saved ? settings_select_wifi_profile(ssid)
+                             : settings_set_wifi_credentials(ssid, password);
     if (err == ESP_OK) {
       cJSON_AddBoolToObject(response, "success", true);
       ESP_LOGI(TAG, "WiFi credentials saved. We are restarting...");
-      // Schedule restart
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      esp_restart();
+
     } else {
       cJSON_AddBoolToObject(response, "success", false);
       cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
@@ -297,8 +311,9 @@ static esp_err_t wifi_config_handler(httpd_req_t *req) {
   httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
   free(json_str);
   cJSON_Delete(json);
+  bool restart = cJSON_IsTrue(cJSON_GetObjectItem(response, "success"));
   cJSON_Delete(response);
-
+  if (restart) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_restart(); }
   return ESP_OK;
 }
 
@@ -1307,7 +1322,7 @@ esp_err_t web_server_start(uint16_t port) {
 #endif
   config.lru_purge_enable = true; // Reclaim stale sockets when all are in use
   config.max_uri_handlers =
-      30; // Room for captive portal + EQ + speedtest + brightness + channel
+      32; // Room for captive portal + EQ + speedtest + brightness + channel
 #ifdef DAC_HAS_SUB_OFFSET
   config.max_uri_handlers += 2; // sub level get/post
 #endif
@@ -1362,6 +1377,9 @@ esp_err_t web_server_start(uint16_t port) {
                                .handler = wifi_scan_handler};
   httpd_register_uri_handler(s_server, &wifi_scan_uri);
 
+  httpd_uri_t wifi_saved_uri = {.uri = "/api/wifi/saved", .method = HTTP_GET,
+                                .handler = wifi_saved_handler};
+  httpd_register_uri_handler(s_server, &wifi_saved_uri);
   httpd_uri_t wifi_config_uri = {.uri = "/api/wifi/config",
                                  .method = HTTP_POST,
                                  .handler = wifi_config_handler};
