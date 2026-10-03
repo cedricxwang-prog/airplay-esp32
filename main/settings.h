@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 /**
  * Persistent settings storage (NVS)
@@ -86,10 +87,19 @@ esp_err_t settings_set_wifi_credentials(const char *ssid, const char *password);
 bool settings_has_wifi_credentials(void);
 #define SETTINGS_WIFI_PROFILES 8
 /* Returns SSIDs only; passwords remain in device storage. */
-/* 0: speaker/HomePod mini, 1: Apple TV. Reboot applies the model. */
+#define SETTINGS_AIRPLAY_ICON_COUNT 3
+/* 0: HomePod mini, 1: Apple TV, 2: generic speaker. Default remains 0.
+ * The stored selection is available immediately; protocol metadata and
+ * features use the startup selection until the next reboot. The model is
+ * a client display hint; clients choose their actual artwork. Preset 2 adds
+ * audio-accessory classification bit 26 to AirPlay 2 features. */
 unsigned settings_get_airplay_icon(void);
 esp_err_t settings_set_airplay_icon(unsigned mode);
+/* Invalid modes map to the default model; the setter rejects invalid modes. */
+const char *settings_airplay_model_for_icon(unsigned mode);
 const char *settings_get_airplay_model(void);
+uint32_t settings_get_airplay_features_lo(void);
+const char *settings_get_airplay_manufacturer(void);
 size_t settings_list_wifi_profiles(char ssids[][33], size_t capacity);
 esp_err_t settings_select_wifi_profile(const char *ssid);
 

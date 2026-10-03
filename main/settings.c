@@ -47,11 +47,15 @@ static bool g_eq_loaded = false;
 
 esp_err_t settings_init(void) {
   // Load volume on init
+  g_airplay_icon = 0;
   nvs_handle_t nvs;
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
   if (err == ESP_OK) {
     uint8_t icon = 0;
-    if (nvs_get_u8(nvs, "airplay_icon", &icon) == ESP_OK && icon <= 1) g_airplay_icon = icon;
+    if (nvs_get_u8(nvs, "airplay_icon", &icon) == ESP_OK &&
+        icon < SETTINGS_AIRPLAY_ICON_COUNT) {
+      g_airplay_icon = icon;
+    }
     int32_t vol_fixed;
     err = nvs_get_i32(nvs, NVS_KEY_VOLUME, &vol_fixed);
     if (err == ESP_OK) {
@@ -233,24 +237,55 @@ esp_err_t settings_get_wifi_password(char *password, size_t len) {
 }
 
 unsigned settings_get_airplay_icon(void) {
-  nvs_handle_t nvs; uint8_t mode = g_airplay_icon;
+  nvs_handle_t nvs;
+  uint8_t mode = g_airplay_icon;
   if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
-    if (nvs_get_u8(nvs, "airplay_icon", &mode) != ESP_OK || mode > 1) mode = g_airplay_icon;
+    if (nvs_get_u8(nvs, "airplay_icon", &mode) != ESP_OK ||
+        mode >= SETTINGS_AIRPLAY_ICON_COUNT) {
+      mode = g_airplay_icon;
+    }
     nvs_close(nvs);
   }
   return mode;
 }
+
 esp_err_t settings_set_airplay_icon(unsigned mode) {
-  if (mode > 1) return ESP_ERR_INVALID_ARG;
+  if (mode >= SETTINGS_AIRPLAY_ICON_COUNT) return ESP_ERR_INVALID_ARG;
   nvs_handle_t nvs;
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
   if (err != ESP_OK) return err;
   err = nvs_set_u8(nvs, "airplay_icon", (uint8_t)mode);
   if (err == ESP_OK) err = nvs_commit(nvs);
-  nvs_close(nvs); return err;
+  nvs_close(nvs);
+  return err;
 }
+
+const char *settings_airplay_model_for_icon(unsigned mode) {
+  switch (mode) {
+  case 1:
+    return "AppleTV3,2";
+  case 2:
+    return "AirPlay-ESP32-Speaker";
+  default:
+    return "AudioAccessory5,1";
+  }
+}
+
 const char *settings_get_airplay_model(void) {
-  return g_airplay_icon == 1 ? "AppleTV3,2" : "AudioAccessory5,1";
+  return settings_airplay_model_for_icon(g_airplay_icon);
+}
+
+uint32_t settings_get_airplay_features_lo(void) {
+#ifdef CONFIG_AIRPLAY_FORCE_V1
+  return 0x005C4A00;
+#else
+  /* bit 26 advertises an audio accessory for the generic speaker preset. */
+  return g_airplay_icon == 2 ? 0x445C4A00 : 0x405C4A00;
+#endif
+}
+
+const char *settings_get_airplay_manufacturer(void) {
+  return "Cedric";
 }
 
 typedef struct { char ssid[33]; char password[65]; } wifi_profile_t;
