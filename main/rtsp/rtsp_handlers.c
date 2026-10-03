@@ -534,12 +534,20 @@ static void handle_options(int socket, rtsp_conn_t *conn,
                      0);
 }
 
+// Compare a request path against a known path, ignoring any query string.
+// iOS sends "GET /info?txtAirPlay&txtRAOP" (AirPlay v1 RAOP probe), which
+// must match "/info" just like the plain AirPlay 2 form.
+static bool path_is(const char *path, const char *want) {
+  size_t n = strlen(want);
+  return strncmp(path, want, n) == 0 && (path[n] == '\0' || path[n] == '?');
+}
+
 static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
                        const uint8_t *raw, size_t raw_len) {
   (void)raw;
   (void)raw_len;
 
-  if (strcmp(req->path, "/info") == 0) {
+  if (path_is(req->path, "/info")) {
     // Build info response
     char device_id[18];
     char device_name[65];
@@ -555,6 +563,35 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
 #else
     int64_t protocol_version = 2;
 #endif
+
+    // AirPlay v1 (RAOP) probes ask for /info?txtAirPlay&txtRAOP and expect a
+    // text/parameters key-value body — a plist makes classic v1 clients give
+    // up.  Values mirror the _raop._tcp TXT record in mdns_airplay.c.
+    if (strstr(req->path, "txtRAOP") != NULL ||
+        strstr(req->path, "txtAirPlay") != NULL) {
+      static char body[512];
+      int n = snprintf(body, sizeof(body),
+                       "txtvers=1\r\n"
+                       "ch=2\r\n"
+                       "cn=0,1,2,3\r\n"
+                       "da=true\r\n"
+                       "ek=1\r\n"
+                       "et=0,1,3,5\r\n"
+                       "md=0,1,2\r\n"
+                       "pw=0\r\n"
+                       "sr=44100\r\n"
+                       "ss=16\r\n"
+                       "sv=false\r\n"
+                       "tp=UDP\r\n"
+                       "vn=65537\r\n"
+                       "vs=377.40.00\r\n"
+                       "am=AudioAccessory5,1\r\n"
+                       "deviceid=%s\r\n",
+                       device_id);
+      rtsp_send_http_response(socket, conn, 200, "OK", "text/parameters", body,
+                              (size_t)(n > 0 ? n : 0));
+      return;
+    }
 
     if (request_uses_rtsp(req)) {
       static uint8_t body[1024];

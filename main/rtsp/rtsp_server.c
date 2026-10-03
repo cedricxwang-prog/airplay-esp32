@@ -5,6 +5,7 @@
 #include <netinet/tcp.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -49,10 +50,36 @@ typedef struct {
   int socket;
   volatile bool should_stop;
   volatile bool is_old; // Marked as old client being killed
+  int takeover_slot; // Other slot to evict if this connection starts a
+                     // session (-1 = none). Deferred takeover: probe
+                     // connections must never kill an active stream.
+  volatile bool session_started; // This connection started a session
+                                 // (SETUP/ANNOUNCE/RECORD) and owns the
+                                 // global playback state.
 } client_slot_t;
 
 static client_slot_t clients[2] = {0}; // Current and old
 static int current_slot = 0;
+
+// Forward declaration: used by process_rtsp_buffer for deferred takeover.
+static void signal_old_client_stop(int old_slot);
+
+// A request that establishes a real session and therefore replaces any
+// client that was active when this connection arrived.
+static bool request_takes_over(const char *header) {
+  return strncasecmp(header, "SETUP ", 6) == 0 ||
+         strncasecmp(header, "ANNOUNCE ", 9) == 0 ||
+         strncasecmp(header, "RECORD ", 7) == 0 ||
+         strncasecmp(header, "POST ", 5) == 0;
+}
+
+// A request that means this connection owns playback state (audio, NTP,
+// PTP, event port). Probe-only connections (/info) never get here.
+static bool request_starts_session(const char *header) {
+  return strncasecmp(header, "SETUP ", 6) == 0 ||
+         strncasecmp(header, "ANNOUNCE ", 9) == 0 ||
+         strncasecmp(header, "RECORD ", 7) == 0;
+}
 
 // Flag set by the play/pause button to tell the grace period loop
 // to send a DACP resume command and keep waiting for reconnect.
@@ -114,6 +141,22 @@ static void process_rtsp_buffer(client_slot_t *slot, uint8_t *buffer,
     }
     memcpy(header_str, buffer, header_len);
     header_str[header_len] = '\0';
+
+    // Session bookkeeping for this connection.  iOS opens short-lived probe
+    // connections (GET /info?txtAirPlay&txtRAOP) while a stream is playing;
+    // those must not disturb the active session.  A connection only takes
+    // over the other slot — and only claims playback state — once it
+    // actually starts a session.
+    if (request_starts_session(header_str) && !slot->session_started) {
+      slot->session_started = true;
+      // Volume/control state follows the live session, not the most
+      // recently accepted probe connection.
+      current_slot = (int)(slot - clients);
+    }
+    if (request_takes_over(header_str) && slot->takeover_slot >= 0) {
+      signal_old_client_stop(slot->takeover_slot);
+      slot->takeover_slot = -1;
+    }
 
     int content_len = rtsp_parse_content_length(header_str);
     if (content_len < 0) {
@@ -267,6 +310,13 @@ cleanup:
   close(slot->socket);
   slot->socket = -1;
 
+  // A connection that never started a session (an iOS /info probe, a port
+  // scan, ...) must not touch global playback state — an active stream in
+  // the other slot keeps running untouched.
+  if (!slot->session_started) {
+    goto session_done;
+  }
+
   // Immediate: stop audio and NTP
   audio_receiver_stop();
   audio_output_flush();
@@ -360,6 +410,7 @@ cleanup:
     rtsp_stop_event_port_task();
   }
 
+session_done:
   if (conn->event_socket >= 0) {
     close(conn->event_socket);
     conn->event_socket = -1;
@@ -373,6 +424,8 @@ cleanup:
   slot->task = NULL;
   slot->should_stop = false;
   slot->is_old = false;
+  slot->session_started = false;
+  slot->takeover_slot = -1;
 
   vTaskDelete(NULL);
 }
@@ -408,6 +461,8 @@ static void server_task(void *pvParameters) {
     clients[i].task = NULL;
     clients[i].should_stop = false;
     clients[i].is_old = false;
+    clients[i].session_started = false;
+    clients[i].takeover_slot = -1;
   }
 
   server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -460,34 +515,40 @@ static void server_task(void *pvParameters) {
 
     ESP_LOGI(TAG, "New client connected");
 
-    // Find slot for new client (alternate between 0 and 1)
-    int new_slot = 1 - current_slot;
-
-    // If new slot still has a running task, wait for it to fully exit.
-    // With static TCBs we MUST NOT reuse until the old task is deleted.
-    if (clients[new_slot].task != NULL) {
-      clients[new_slot].should_stop = true;
-      if (clients[new_slot].socket >= 0) {
-        shutdown(clients[new_slot].socket, SHUT_RDWR);
+    // Pick a free slot.  Do NOT tear down the other client here: iOS opens
+    // short-lived probe connections (GET /info?txtAirPlay&txtRAOP) while a
+    // stream is playing, and killing the active session on every probe was
+    // what caused random dropouts mid-playback.  A real session only takes
+    // over once it actually starts — see process_rtsp_buffer().
+    int new_slot = -1;
+    for (int attempt = 0; attempt < 20; attempt++) {
+      if (clients[1 - current_slot].task == NULL) {
+        new_slot = 1 - current_slot;
+        break;
       }
-      int timeout = 30; // 3 seconds max
-      while (clients[new_slot].task != NULL && timeout > 0) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        timeout--;
+      if (clients[current_slot].task == NULL) {
+        new_slot = current_slot;
+        break;
       }
-      if (clients[new_slot].task != NULL) {
-        ESP_LOGE(TAG, "Slot %d task did not exit in time", new_slot);
-        close(new_socket);
-        continue;
-      }
+      // Both slots busy (active stream + lingering probe/grace task) — wait
+      // briefly for one to free up, then refuse instead of killing a session.
+      vTaskDelay(pdMS_TO_TICKS(50));
     }
-    // Signal old client to stop (in background)
-    signal_old_client_stop(current_slot);
+    if (new_slot < 0) {
+      ESP_LOGW(TAG, "Both client slots busy — refusing new connection");
+      close(new_socket);
+      continue;
+    }
 
     // Setup new slot
     clients[new_slot].socket = new_socket;
     clients[new_slot].should_stop = false;
     clients[new_slot].is_old = false;
+    clients[new_slot].session_started = false;
+    // If the other slot is occupied, remember it so this connection can
+    // evict it when (and only when) it establishes a session.
+    clients[new_slot].takeover_slot =
+        (clients[1 - new_slot].task != NULL) ? (1 - new_slot) : -1;
 
     // Start new client task immediately.
     clients[new_slot].task = NULL;
@@ -498,9 +559,12 @@ static void server_task(void *pvParameters) {
       ESP_LOGE(TAG, "Failed to create client task");
       close(new_socket);
       clients[new_slot].socket = -1;
-    } else {
-      current_slot = new_slot;
+      clients[new_slot].takeover_slot = -1;
     }
+    // Note: current_slot deliberately does NOT change here.  It tracks the
+    // slot that most recently established a session (updated in
+    // process_rtsp_buffer), so probe connections cannot steal volume /
+    // control state from the live player.
   }
 
   // Stop all clients
