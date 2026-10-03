@@ -64,6 +64,10 @@ input:focus{outline:none;border-color:#e94560}
 <div class='form-group'><label data-zh="AirPlay 设备名称" data-en="AirPlay Device Name">AirPlay 设备名称</label><input type='text' id='dev-name' placeholder='我的音箱' data-placeholder-zh="我的音箱" data-placeholder-en="My Speaker"></div>
 <button class='btn btn-primary' onclick='saveName()' data-zh="保存名称" data-en="Save Name">保存名称</button>
 <div id='name-msg'></div>
+<div class='form-group' style='margin-top:18px'><label for='airplay-icon' data-zh='AirPlay 图标' data-en='AirPlay Icon'>AirPlay 图标</label>
+<select id='airplay-icon'><option value='0' data-zh='音箱 / HomePod mini（默认）' data-en='Speaker / HomePod mini (default)'>音箱 / HomePod mini（默认）</option><option value='1' data-zh='电视 / Apple TV' data-en='TV / Apple TV'>电视 / Apple TV</option></select></div>
+<p style='color:#888;font-size:12px' data-zh='通过设备型号提示图标；实际显示由 iOS/macOS 决定，保存后重启生效。' data-en='Advertises a model hint. iOS/macOS chooses the actual icon. Restart after saving.'>通过设备型号提示图标；实际显示由 iOS/macOS 决定，保存后重启生效。</p>
+<button class='btn btn-secondary' onclick='saveIcon()' data-zh='保存图标' data-en='Save Icon'>保存图标</button><div id='icon-msg'></div>
 <div class='form-group' style='margin-top:18px'><label for='led-brightness' data-zh="LED 亮度" data-en="LED Brightness">LED 亮度</label>
 <div class='slider-row'><input type='range' id='led-brightness' min='0' max='255' value='128' oninput='document.getElementById("led-pct").textContent=Math.round(this.value/255*100)+"%"'>
 <span id='led-pct'>50%</span></div></div>
@@ -150,6 +154,8 @@ async function saveWiFi(){
   try{var r=await fetch('/api/wifi/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:s,password:p})});
     var d=await r.json();if(d.success){msg('wifi-msg',tr("已保存！重启中…","Saved! Restarting..."),'ok');}else{msg('wifi-msg',d.error,'err');}}
   catch(e){msg('wifi-msg',tr("错误","Error"),'err');}}
+async function loadIcon(){try{var r=await fetch('/api/device/icon');var d=await r.json();if(d.success){document.getElementById('airplay-icon').value=String(d.mode);if(d.restart_required)msg('icon-msg',tr('重启后应用图标','Restart to apply icon'),'info');}}catch(e){console.warn('Could not load icon',e);}}
+async function saveIcon(){try{var r=await fetch('/api/device/icon',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:Number(document.getElementById('airplay-icon').value)})});var d=await r.json();if(!r.ok||!d.success)throw new Error(d.error||'HTTP '+r.status);msg('icon-msg',d.restart_required?tr('已保存，重启后生效','Saved. Restart to apply.'):tr('已保存','Saved'),'ok');}catch(e){msg('icon-msg',tr('保存失败：','Save failed: ')+e.message,'err');}}
 async function loadBrightness(){
   try{var r=await fetch('/api/led/brightness');var d=await r.json();
     if(d.success){var s=document.getElementById('led-brightness');s.value=d.brightness;
@@ -266,5 +272,5 @@ window.onload=function(){applyLanguage();document.getElementById('ui-language').
   document.getElementById('fw-file').onchange=function(e){var f=e.target.files[0];
     document.getElementById('fw-name').textContent=f?f.name:tr("未选择文件","No file selected");
     document.getElementById('ota-btn').disabled=!f;};
-  loadSavedWiFi();loadInfo();loadBrightness();loadChannel();setInterval(loadInfo,30000);};
+  loadIcon();loadSavedWiFi();loadInfo();loadBrightness();loadChannel();setInterval(loadInfo,30000);};
 </script></body></html>
