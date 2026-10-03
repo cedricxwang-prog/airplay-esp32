@@ -14,6 +14,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #include "rtsp_conn.h"
@@ -25,6 +26,7 @@
 #include "ptp_clock.h"
 #include "rtsp_events.h"
 #include "dacp_client.h"
+#include "settings.h"
 
 static const char *TAG = "rtsp_server";
 
@@ -56,10 +58,40 @@ typedef struct {
   volatile bool session_started; // This connection started a session
                                  // (SETUP/ANNOUNCE/RECORD) and owns the
                                  // global playback state.
+  bool shared_state_retired; // Global resources already stopped at EOF/handoff
 } client_slot_t;
 
 static client_slot_t clients[2] = {0}; // Current and old
 static int current_slot = 0;
+// Serialize takeover/dispatch with shared-state cleanup. A retiring task must
+// finish its global cleanup before a new session can establish its clock.
+static SemaphoreHandle_t session_state_mutex;
+
+static bool slot_owns_session(const client_slot_t *slot) {
+  return slot->session_started && !slot->is_old &&
+         slot == &clients[current_slot];
+}
+
+static void retire_session_state(client_slot_t *slot) {
+  if (slot->shared_state_retired) {
+    return;
+  }
+  audio_receiver_stop();
+  audio_output_flush();
+  ntp_clock_stop();
+  ptp_clock_clear();
+  settings_persist_volume();
+  slot->shared_state_retired = true;
+}
+
+static void disconnect_session_if_owner(client_slot_t *slot) {
+  xSemaphoreTake(session_state_mutex, portMAX_DELAY);
+  if (slot_owns_session(slot)) {
+    dacp_clear_session();
+    rtsp_events_emit(RTSP_EVENT_DISCONNECTED, NULL);
+  }
+  xSemaphoreGive(session_state_mutex);
+}
 
 // Forward declaration: used by process_rtsp_buffer for deferred takeover.
 static void signal_old_client_stop(int old_slot);
@@ -69,8 +101,7 @@ static void signal_old_client_stop(int old_slot);
 static bool request_takes_over(const char *header) {
   return strncasecmp(header, "SETUP ", 6) == 0 ||
          strncasecmp(header, "ANNOUNCE ", 9) == 0 ||
-         strncasecmp(header, "RECORD ", 7) == 0 ||
-         strncasecmp(header, "POST ", 5) == 0;
+         strncasecmp(header, "RECORD ", 7) == 0;
 }
 
 // A request that means this connection owns playback state (audio, NTP,
@@ -142,22 +173,6 @@ static void process_rtsp_buffer(client_slot_t *slot, uint8_t *buffer,
     memcpy(header_str, buffer, header_len);
     header_str[header_len] = '\0';
 
-    // Session bookkeeping for this connection.  iOS opens short-lived probe
-    // connections (GET /info?txtAirPlay&txtRAOP) while a stream is playing;
-    // those must not disturb the active session.  A connection only takes
-    // over the other slot — and only claims playback state — once it
-    // actually starts a session.
-    if (request_starts_session(header_str) && !slot->session_started) {
-      slot->session_started = true;
-      // Volume/control state follows the live session, not the most
-      // recently accepted probe connection.
-      current_slot = (int)(slot - clients);
-    }
-    if (request_takes_over(header_str) && slot->takeover_slot >= 0) {
-      signal_old_client_stop(slot->takeover_slot);
-      slot->takeover_slot = -1;
-    }
-
     int content_len = rtsp_parse_content_length(header_str);
     if (content_len < 0) {
       content_len = 0;
@@ -172,12 +187,47 @@ static void process_rtsp_buffer(client_slot_t *slot, uint8_t *buffer,
       break;
     }
 
+    xSemaphoreTake(session_state_mutex, portMAX_DELAY);
+    if (slot->should_stop || slot->is_old) {
+      xSemaphoreGive(session_state_mutex);
+      free(header_str);
+      break;
+    }
+
+    // Session bookkeeping for a complete request. iOS opens short-lived probe
+    // connections (GET /info?txtAirPlay&txtRAOP) while a stream is playing;
+    // those must not disturb the active session.  A connection only takes
+    // over the other slot — and only claims playback state — once it
+    // actually starts a session.
+    if (request_takes_over(header_str) && slot->takeover_slot >= 0) {
+      client_slot_t *old = &clients[slot->takeover_slot];
+      if (slot_owns_session(old)) {
+        // Retire the old receiver before new SETUP can select/destroy its
+        // decoder or observe a still-running buffered stream. Late old-task
+        // cleanup must not repeat this against the new session's resources.
+        retire_session_state(old);
+        dacp_clear_session();
+        rtsp_events_emit(RTSP_EVENT_DISCONNECTED, NULL);
+        rtsp_stop_event_port_task();
+        ptp_clock_init(); // v1 may have stopped PTP to free socket slots
+      }
+      signal_old_client_stop(slot->takeover_slot);
+      slot->takeover_slot = -1;
+    }
+    if (request_starts_session(header_str) && !slot->session_started) {
+      slot->session_started = true;
+      // Volume/control state follows the live session, not the most
+      // recently accepted probe/pairing connection.
+      current_slot = (int)(slot - clients);
+    }
+
     // Null-terminate so strcasestr in parse_raw_header won't read past
     // the message boundary (buffer capacity > total_len).
     uint8_t saved = buffer[total_len];
     buffer[total_len] = '\0';
     rtsp_dispatch(slot->socket, slot->conn, buffer, total_len);
     buffer[total_len] = saved;
+    xSemaphoreGive(session_state_mutex);
     free(header_str);
 
     if (*buf_len > total_len) {
@@ -236,6 +286,14 @@ static void client_task(void *pvParameters) {
   // Socket timeout for stop signal responsiveness
   struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
   setsockopt(slot->socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+  // Dispatch holds the session-state mutex. Bound writes so a stalled control
+  // client cannot keep a successor or owner cleanup waiting indefinitely.
+  struct timeval send_tv = {.tv_sec = 5, .tv_usec = 0};
+  if (setsockopt(slot->socket, SOL_SOCKET, SO_SNDTIMEO, &send_tv,
+                 sizeof(send_tv)) != 0) {
+    ESP_LOGE(TAG, "Failed to bound RTSP send timeout: %d", errno);
+    goto cleanup;
+  }
 
   // Disable Nagle: RTSP control commands (volume, pause) are tiny and must
   // not wait for coalescing/delayed-ACK, which adds tens to hundreds of ms of
@@ -266,6 +324,8 @@ static void client_task(void *pvParameters) {
             slot->socket, conn, buffer + buf_len, buf_capacity - buf_len);
         if (block_len <= 0) {
           if (slot->should_stop || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            ESP_LOGI(TAG, "Encrypted control ended: slot=%d result=%d errno=%d stop=%d",
+                     slot_idx, block_len, errno, slot->should_stop);
             goto cleanup;
           }
           continue;
@@ -298,6 +358,8 @@ static void client_task(void *pvParameters) {
       if (recv_len < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         continue;
       }
+      ESP_LOGI(TAG, "Plain control ended: slot=%d result=%d errno=%d stop=%d",
+               slot_idx, (int)recv_len, errno, slot->should_stop);
       break;
     }
     buf_len += (size_t)recv_len;
@@ -313,27 +375,29 @@ cleanup:
   // A connection that never started a session (an iOS /info probe, a port
   // scan, ...) must not touch global playback state — an active stream in
   // the other slot keeps running untouched.
-  if (!slot->session_started) {
+  xSemaphoreTake(session_state_mutex, portMAX_DELAY);
+  if (!slot_owns_session(slot)) {
+    xSemaphoreGive(session_state_mutex);
     goto session_done;
   }
 
-  // Immediate: stop audio and NTP
-  audio_receiver_stop();
-  audio_output_flush();
-  ntp_clock_stop();
+  // Immediate: stop shared resources once, before a successor can take over.
+  retire_session_state(slot);
 
   bool has_dacp_remote = conn && conn->protocol_version == 1 &&
                          conn->dacp_id[0] != '\0' &&
                          conn->active_remote[0] != '\0';
+  if (has_dacp_remote && !slot->should_stop) {
+    s_resume_requested = false;
+    rtsp_events_emit(RTSP_EVENT_PAUSED, NULL);
+  }
+  xSemaphoreGive(session_state_mutex);
 
   // iOS v1 pause handling needs DACP to distinguish pause from disconnect.
   // Third-party RAOP clients often have no DACP remote; disconnect them
   // immediately instead of delaying slot cleanup with an iOS-only grace path.
   if (has_dacp_remote) {
     if (!slot->should_stop) {
-      s_resume_requested = false;
-      rtsp_events_emit(RTSP_EVENT_PAUSED, NULL);
-
       // Phase 1: let mDNS settle (3 s), but exit early on resume or reconnect
       for (int i = 0; i < 6 && !slot->should_stop; i++) {
         vTaskDelay(pdMS_TO_TICKS(500));
@@ -385,47 +449,51 @@ cleanup:
         ESP_LOGI(TAG, "Client reconnected during grace period");
       } else {
         ESP_LOGI(TAG, "Grace period expired — full disconnect");
-        dacp_clear_session();
-        rtsp_events_emit(RTSP_EVENT_DISCONNECTED, NULL);
+        disconnect_session_if_owner(slot);
       }
     } else {
       // Forcefully stopped (server shutdown or replaced by new client)
-      dacp_clear_session();
-      rtsp_events_emit(RTSP_EVENT_DISCONNECTED, NULL);
+      disconnect_session_if_owner(slot);
     }
   } else {
     // v2 / unknown — no grace period, clear immediately.
-    dacp_clear_session();
-    rtsp_events_emit(RTSP_EVENT_DISCONNECTED, NULL);
+    disconnect_session_if_owner(slot);
   }
 
   // When being replaced by a new client (is_old), skip global state changes —
   // the new session's SETUP already manages PTP and the event port task.
-  if (!slot->is_old) {
+  xSemaphoreTake(session_state_mutex, portMAX_DELAY);
+  if (slot_owns_session(slot)) {
     ptp_clock_init(); // Restart PTP (stopped during v1 SETUP to free sockets)
     rtsp_stop_event_port_task();
-  } else if (rtsp_event_port_listen_socket() >= 0 &&
-             rtsp_event_port_listen_socket() == conn->event_socket) {
-    // Old task still using our socket — stop it before closing
-    rtsp_stop_event_port_task();
   }
+  xSemaphoreGive(session_state_mutex);
 
 session_done:
+  // The event task holds this listener descriptor, not the connection. Stop a
+  // matching old task before closing the descriptor, but never a new listener.
+  xSemaphoreTake(session_state_mutex, portMAX_DELAY);
+  if (conn->event_socket >= 0 &&
+      rtsp_event_port_listen_socket() == conn->event_socket) {
+    rtsp_stop_event_port_task();
+  }
   if (conn->event_socket >= 0) {
     close(conn->event_socket);
     conn->event_socket = -1;
   }
+  xSemaphoreGive(session_state_mutex);
 
-  rtsp_conn_cleanup(conn);
   rtsp_conn_free(conn);
 
   slot->conn = NULL;
   slot->socket = -1;
-  slot->task = NULL;
   slot->should_stop = false;
   slot->is_old = false;
   slot->session_started = false;
+  slot->shared_state_retired = false;
   slot->takeover_slot = -1;
+  // Publish the free slot only after all state from this task is retired.
+  slot->task = NULL;
 
   vTaskDelete(NULL);
 }
@@ -462,6 +530,7 @@ static void server_task(void *pvParameters) {
     clients[i].should_stop = false;
     clients[i].is_old = false;
     clients[i].session_started = false;
+    clients[i].shared_state_retired = false;
     clients[i].takeover_slot = -1;
   }
 
@@ -545,6 +614,7 @@ static void server_task(void *pvParameters) {
     clients[new_slot].should_stop = false;
     clients[new_slot].is_old = false;
     clients[new_slot].session_started = false;
+    clients[new_slot].shared_state_retired = false;
     // If the other slot is occupied, remember it so this connection can
     // evict it when (and only when) it establishes a session.
     clients[new_slot].takeover_slot =
@@ -604,6 +674,13 @@ esp_err_t rtsp_server_start(void) {
     if (!rtsp_server_wait_for_task_stopped(40)) {
       ESP_LOGE(TAG, "Previous RTSP server task did not stop");
       return ESP_ERR_INVALID_STATE;
+    }
+  }
+
+  if (!session_state_mutex) {
+    session_state_mutex = xSemaphoreCreateMutex();
+    if (!session_state_mutex) {
+      return ESP_ERR_NO_MEM;
     }
   }
 

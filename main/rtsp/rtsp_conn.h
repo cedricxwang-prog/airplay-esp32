@@ -79,8 +79,8 @@ void rtsp_conn_free(rtsp_conn_t *conn);
 void rtsp_conn_reset_stream(rtsp_conn_t *conn);
 
 /**
- * Full cleanup when connection closes
- * Stops audio, closes sockets, clears PTP
+ * Close this connection's sockets and reset its private stream/encryption state.
+ * The server/TEARDOWN handler manages shared audio, clocks and volume persistence.
  */
 void rtsp_conn_cleanup(rtsp_conn_t *conn);
 

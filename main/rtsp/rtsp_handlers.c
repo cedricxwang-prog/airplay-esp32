@@ -235,6 +235,7 @@ static void event_port_task(void *pvParameters) {
       rtsp_events_emit(RTSP_EVENT_CLIENT_CONNECTED, NULL);
 
       // Monitor connection for disconnection
+      bool reported_input = false;
       while (event_client_socket >= 0 && !event_task_should_stop) {
         fd_set cfds;
         FD_ZERO(&cfds);
@@ -252,6 +253,10 @@ static void event_port_task(void *pvParameters) {
         if (ret > 0 && FD_ISSET(event_client_socket, &cfds)) {
           char buf[16];
           ssize_t n = recv(event_client_socket, buf, sizeof(buf), MSG_PEEK);
+          if (n > 0 && !reported_input) {
+            ESP_LOGI(TAG, "Event channel has unread data (%d bytes)", (int)n);
+            reported_input = true;
+          }
           if (n <= 0) {
             close(event_client_socket);
             event_client_socket = -1;
@@ -449,6 +454,16 @@ int rtsp_dispatch(int socket, rtsp_conn_t *conn, const uint8_t *raw_request,
     ESP_LOGW(TAG, "Failed to parse RTSP request");
     return -1;
   }
+  if ((strcmp(req.method, "GET") == 0 && strncmp(req.path, "/info", 5) == 0) ||
+      (strcmp(req.method, "POST") == 0 &&
+       (strncmp(req.path, "/pair-", 6) == 0 ||
+        strcmp(req.path, "/fp-setup") == 0 ||
+        strcmp(req.path, "/auth-setup") == 0)) ||
+      strcmp(req.method, "SETUP") == 0 || strcmp(req.method, "RECORD") == 0) {
+    ESP_LOGI(TAG, "Handshake: %s %s %s seq=%d bytes=%u encrypted=%d",
+             req.method, req.path, req.protocol, req.cseq,
+             (unsigned)req.body_len, conn->encrypted_mode);
+  }
 
   // Extract DACP headers if present (AirPlay 1 only — modern iOS AirPlay 2
   // does not send these; it uses MRP for remote control instead).
@@ -565,13 +580,12 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
     int64_t protocol_version = 2;
 #endif
 
-    // AirPlay v1 (RAOP) probes ask for /info?txtAirPlay&txtRAOP and expect a
-    // text/parameters key-value body — a plist makes classic v1 clients give
-    // up.  Values mirror the _raop._tcp TXT record in mdns_airplay.c.
-    bool unified_txt = (features & (UINT64_C(1) << 26)) != 0;
-    if ((!unified_txt || !request_uses_rtsp(req)) &&
-        (strstr(req->path, "txtRAOP") != NULL ||
-         strstr(req->path, "txtAirPlay") != NULL)) {
+    // Query probes retain the original text/parameters response for all
+    // presets and both HTTP/RTSP requests. Ordinary /info responses keep
+    // their plist/TXT metadata; this branch changes query routing only.
+    bool unified_txt = airplay_info_has_txt(features, settings_get_airplay_model());
+    if (strstr(req->path, "txtRAOP") != NULL ||
+        strstr(req->path, "txtAirPlay") != NULL) {
       static char body[512];
       int n = snprintf(body, sizeof(body),
                        "txtvers=1\r\n"
@@ -1132,6 +1146,12 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
 
   ESP_LOGI(TAG, "SETUP: has_streams=%d, stream_count=%zu", request_has_streams,
            stream_count);
+  char timing_protocol[24] = "absent";
+  if (body && body_len > 0 && is_bplist && !request_has_streams) {
+    bplist_find_string(body, body_len, "timingProtocol", timing_protocol,
+                        sizeof(timing_protocol));
+    ESP_LOGI(TAG, "Initial SETUP timingProtocol=%s", timing_protocol);
+  }
 
   // AirPlay v1 stream SETUP is identified by a Transport header and no bplist
   // streams array. Classify it before opening AirPlay 2-only resources.
@@ -1318,9 +1338,26 @@ static void handle_setup(int socket, rtsp_conn_t *conn,
     ESP_LOGI(TAG, "SETUP: Initial connection setup (no streams)");
 
     if (is_bplist) {
-      uint8_t plist_body[128];
-      size_t plist_len = bplist_build_initial_setup(
-          plist_body, sizeof(plist_body), conn->event_port);
+      char receiver_address[INET_ADDRSTRLEN];
+      const char *timing_peer = NULL;
+      if (strcmp(timing_protocol, "PTP") == 0) {
+        struct sockaddr_in local_address;
+        socklen_t address_len = sizeof(local_address);
+        if (getsockname(socket, (struct sockaddr *)&local_address,
+                         &address_len) != 0 ||
+            local_address.sin_family != AF_INET ||
+            !inet_ntop(AF_INET, &local_address.sin_addr, receiver_address,
+                        sizeof(receiver_address))) {
+          ESP_LOGE(TAG, "Cannot determine PTP receiver address");
+          rtsp_send_response(socket, conn, 500, "Internal Error", req->cseq,
+                             NULL, NULL, 0);
+          return;
+        }
+        timing_peer = receiver_address;
+      }
+      uint8_t plist_body[512];
+      size_t plist_len = bplist_build_initial_setup_with_timing_peer(
+          plist_body, sizeof(plist_body), conn->event_port, timing_peer);
       if (plist_len == 0) {
         rtsp_send_response(socket, conn, 500, "Internal Error", req->cseq, NULL,
                            NULL, 0);
