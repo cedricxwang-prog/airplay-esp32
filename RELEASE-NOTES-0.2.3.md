@@ -1,7 +1,7 @@
 # 0.2.3 by cedric
 
 Upstream baseline: rbouteiller/airplay-esp32 commit 811d5f8 (v0.2.1).
-Local predecessor: 3c7a4b2 (0.2.1.2). This is an experimental fork release.
+Local predecessor: 3c7a4b2 (0.2.1.2). This is an experimental fork release. Revision tag: `v0.2.3-cedric.1` (adds the requested icon configuration after the initial publication).
 
 ## 修改及优化 / Changes
 
@@ -19,6 +19,7 @@ Local predecessor: 3c7a4b2 (0.2.1.2). This is an experimental fork release.
 | main/network/log_stream.c | 在原始日志处理消耗 va_list 之前复制，修复可变参数复用。 Copy va_list before consumption. |
 | data/www/index.html | 主配置页中英文切换、记忆选择、顶部 by Cedric；OTA 检查 HTTP 状态；SSID 与提示安全文本渲染。 Main settings language switch, remembered preference, attribution, HTTP error checking, text rendering. |
 | main/settings.c/h, main/network/web_server.c | 最多保存 8 个 WiFi，迁移原单网络配置；列表只返回 SSID，选择网络复用设备内密码；WiFi 保存成功响应后才重启。 Save up to eight WiFi profiles, migrate the legacy profile, list SSIDs only, reuse stored passwords and respond before reboot. |
+| main/settings.c/h, main/network/mdns_airplay.c, web_server.c, main/rtsp/rtsp_handlers.c, main/plist/bplist_builder.c | AirPlay 图标型号提示可选音箱/HomePod mini 或电视/Apple TV；NVS 保存，重启生效；mDNS 与所有 /info 响应保持一致，实际图标由客户端决定。 Persistent speaker/TV model hint, applied at reboot consistently across mDNS and all /info formats; client determines the final icon. |
 | config/sdkconfig.defaults.esp32s3, version.txt, dependencies.lock | 包含本地已有板级/依赖配置与新版本标识。 Preserve local board/dependency configuration and identify this release (build version `0.2.3`, UI display `0.2.3 by cedric`). |
 
 ## 硬件与安装 / Hardware and installation
@@ -32,7 +33,7 @@ Built with PlatformIO environment `esp32s3`: generic ESP32-S3, 16 MB flash, no d
 
 ## 验证与限制 / Validation and limitations
 
-ESP32-S3 firmware builds successfully. Host tests cover 44.1 ↔ 48 kHz conversion, exact zero silence, output bounds, reset, filter delay, strict startup waiting, mono duplication and stale duplicate removal. JavaScript syntax and Chinese/English switching were checked. OTA on the configured ESP32-S3 was verified by version `0.2.3` and the saved-network API; legacy network migration and missing-profile rejection were checked without changing the network. Selecting the existing saved network with its device-stored password returned success and rebooted; reconnection was checked.
+ESP32-S3 firmware builds successfully. Host tests cover 44.1 ↔ 48 kHz conversion, exact zero silence, output bounds, reset, filter delay, strict startup waiting, mono duplication and stale duplicate removal. JavaScript syntax and Chinese/English switching were checked. OTA on the configured ESP32-S3 was verified by version `0.2.3` and the saved-network API; legacy network migration and missing-profile rejection were checked without changing the network. Selecting the existing saved network with its device-stored password returned success and rebooted; reconnection was checked. Icon presets were checked with an independent binary plist parser; on-device tests verified persistence, invalid preset rejection and unchanged advertised model until reboot. The default speaker preset was restored. Actual icon rendering on Apple clients has not been measured.
 
 多设备仍沿用 AirPlay 的同一发送端 PTP/NTP anchor 与 RTP 时间线。所有同型号设备应使用相同固件、输出采样率、GPIO/DAC 配置，并在发送端同一组内播放。80 ms 是迟到容忍，不是同步精度保证。尚未完成多设备长时间漂移、端到端声学延迟或模拟底噪测量；不能保证 sample-accurate 同步或底噪消失。
 
