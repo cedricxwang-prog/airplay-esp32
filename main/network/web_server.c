@@ -223,32 +223,66 @@ static esp_err_t wifi_scan_handler(httpd_req_t *req) {
   uint16_t ap_count = 0;
 
   cJSON *json = cJSON_CreateObject();
+  if (!json) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Unable to allocate scan response");
+  }
   esp_err_t err = wifi_scan(&ap_list, &ap_count);
 
-  if (err == ESP_OK && ap_list) {
+  if (err == ESP_OK) {
     cJSON *networks = cJSON_CreateArray();
+    wifi_ap_record_t connected_ap;
+    bool associated = esp_wifi_sta_get_ap_info(&connected_ap) == ESP_OK;
     for (uint16_t i = 0; i < ap_count; i++) {
       cJSON *net = cJSON_CreateObject();
-      cJSON_AddStringToObject(net, "ssid", (char *)ap_list[i].ssid);
+      char ssid[33];
+      memcpy(ssid, ap_list[i].ssid, sizeof(ap_list[i].ssid));
+      ssid[sizeof(ssid) - 1] = '\0';
+      cJSON_AddStringToObject(net, "ssid", ssid);
       cJSON_AddNumberToObject(net, "rssi", ap_list[i].rssi);
       cJSON_AddNumberToObject(net, "channel", ap_list[i].primary);
+      cJSON_AddBoolToObject(net, "secure",
+                            ap_list[i].authmode != WIFI_AUTH_OPEN);
+      cJSON_AddBoolToObject(net, "connected",
+                            associated && memcmp(connected_ap.bssid,
+                                                  ap_list[i].bssid, 6) == 0);
+      char bssid[18];
+      snprintf(bssid, sizeof(bssid), "%02x:%02x:%02x:%02x:%02x:%02x",
+               ap_list[i].bssid[0], ap_list[i].bssid[1], ap_list[i].bssid[2],
+               ap_list[i].bssid[3], ap_list[i].bssid[4], ap_list[i].bssid[5]);
+      cJSON_AddStringToObject(net, "bssid", bssid);
       cJSON_AddItemToArray(networks, net);
     }
     cJSON_AddItemToObject(json, "networks", networks);
     cJSON_AddBoolToObject(json, "success", true);
-    free(ap_list);
   } else {
     cJSON_AddBoolToObject(json, "success", false);
     cJSON_AddStringToObject(json, "error", esp_err_to_name(err));
+    if (err == ESP_ERR_WIFI_TIMEOUT || err == ESP_ERR_TIMEOUT) {
+      httpd_resp_set_status(req, "504 Gateway Timeout");
+    } else if (err == ESP_ERR_WIFI_STATE || err == ESP_ERR_WIFI_NOT_INIT ||
+               err == ESP_ERR_WIFI_NOT_STARTED || err == ESP_ERR_NO_MEM) {
+      httpd_resp_set_status(req, "503 Service Unavailable");
+      httpd_resp_set_hdr(req, "Retry-After", "2");
+    } else {
+      httpd_resp_set_status(req, "500 Internal Server Error");
+    }
   }
+  free(ap_list);
 
   char *json_str = cJSON_Print(json);
+  if (!json_str) {
+    cJSON_Delete(json);
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Unable to serialize scan response");
+  }
   httpd_resp_set_type(req, "application/json");
-  httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  esp_err_t send_err = httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
   free(json_str);
   cJSON_Delete(json);
 
-  return ESP_OK;
+  return send_err;
 }
 
 static esp_err_t wifi_saved_handler(httpd_req_t *req) {
@@ -267,12 +301,20 @@ static esp_err_t wifi_saved_handler(httpd_req_t *req) {
 
 static esp_err_t wifi_config_handler(httpd_req_t *req) {
   char content[512];
-  int ret = httpd_req_recv(req, content, sizeof(content) - 1);
-  if (ret <= 0) {
-    httpd_resp_send_500(req);
-    return ESP_FAIL;
+  if (req->content_len == 0 || req->content_len >= sizeof(content)) {
+    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                               "WiFi request must be 1-511 bytes");
   }
-  content[ret] = '\0';
+  size_t total = 0;
+  while (total < req->content_len) {
+    int received = httpd_req_recv(req, content + total, req->content_len - total);
+    if (received <= 0) {
+      return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                 "Incomplete WiFi request");
+    }
+    total += (size_t)received;
+  }
+  content[total] = '\0';
 
   cJSON *json = cJSON_Parse(content);
   if (!json) {
@@ -282,39 +324,60 @@ static esp_err_t wifi_config_handler(httpd_req_t *req) {
 
   cJSON *ssid_json = cJSON_GetObjectItem(json, "ssid");
   cJSON *password_json = cJSON_GetObjectItem(json, "password");
+  cJSON *saved_json = cJSON_GetObjectItem(json, "use_saved");
 
   cJSON *response = cJSON_CreateObject();
-  if (ssid_json && cJSON_IsString(ssid_json)) {
+  if (!response) {
+    cJSON_Delete(json);
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Unable to allocate WiFi response");
+  }
+  bool use_saved = cJSON_IsTrue(saved_json);
+  bool valid_fields = cJSON_IsObject(json) && cJSON_IsString(ssid_json) &&
+                      (!saved_json || cJSON_IsBool(saved_json)) &&
+                      (use_saved || cJSON_IsString(password_json));
+  esp_err_t err = ESP_ERR_INVALID_ARG;
+  if (valid_fields) {
     const char *ssid = cJSON_GetStringValue(ssid_json);
-    const char *password = password_json && cJSON_IsString(password_json)
-                               ? cJSON_GetStringValue(password_json)
-                               : "";
-
-    bool use_saved = cJSON_IsTrue(cJSON_GetObjectItem(json, "use_saved"));
-    esp_err_t err = use_saved ? settings_select_wifi_profile(ssid)
-                             : settings_set_wifi_credentials(ssid, password);
-    if (err == ESP_OK) {
-      cJSON_AddBoolToObject(response, "success", true);
-      ESP_LOGI(TAG, "WiFi credentials saved. We are restarting...");
-
-    } else {
-      cJSON_AddBoolToObject(response, "success", false);
-      cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
+    const char *password = use_saved ? "" : cJSON_GetStringValue(password_json);
+    size_t ssid_len = strlen(ssid);
+    size_t password_len = strlen(password);
+    bool valid_password = use_saved || password_len == 0 ||
+                          (password_len >= 8 && password_len <= 63) ||
+                          (password_len == 64 &&
+                           strspn(password, "0123456789abcdefABCDEF") == 64);
+    if (ssid_len >= 1 && ssid_len <= 32 && valid_password) {
+      err = use_saved ? settings_select_wifi_profile(ssid)
+                      : settings_set_wifi_credentials(ssid, password);
     }
+  }
+  bool restart = err == ESP_OK;
+  cJSON_AddBoolToObject(response, "success", restart);
+  if (restart) {
+    cJSON_AddBoolToObject(response, "restart_required", true);
+    ESP_LOGI(TAG, "WiFi credentials saved. Restarting to connect...");
   } else {
-    cJSON_AddBoolToObject(response, "success", false);
-    cJSON_AddStringToObject(response, "error", "Invalid SSID");
+    cJSON_AddStringToObject(response, "error", esp_err_to_name(err));
+    httpd_resp_set_status(req, err == ESP_ERR_INVALID_ARG ? "400 Bad Request"
+                              : err == ESP_ERR_NOT_FOUND ? "404 Not Found"
+                                                        : "500 Internal Server Error");
   }
 
   char *json_str = cJSON_Print(response);
+  if (!json_str) {
+    cJSON_Delete(json);
+    cJSON_Delete(response);
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Unable to serialize WiFi response");
+  }
   httpd_resp_set_type(req, "application/json");
-  httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  esp_err_t send_err = httpd_resp_send(req, json_str, HTTPD_RESP_USE_STRLEN);
   free(json_str);
   cJSON_Delete(json);
-  bool restart = cJSON_IsTrue(cJSON_GetObjectItem(response, "success"));
   cJSON_Delete(response);
   if (restart) { vTaskDelay(pdMS_TO_TICKS(1000)); esp_restart(); }
-  return ESP_OK;
+  return send_err;
 }
 
 static esp_err_t device_icon_handler(httpd_req_t *req) {

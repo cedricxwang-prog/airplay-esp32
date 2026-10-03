@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -31,7 +32,7 @@ static esp_netif_t *s_sta_netif = NULL;
 static esp_netif_t *s_ap_netif = NULL;
 static bool s_wifi_initialized = false;
 static bool s_sta_connected = false;
-static bool s_bssid_set = false;
+static SemaphoreHandle_t s_scan_mutex;
 static esp_timer_handle_t s_retry_timer = NULL;
 
 // Saved AP config from init, used to re-enable AP without duplication
@@ -39,6 +40,9 @@ static wifi_config_t s_ap_config;
 
 static void wifi_select_best_ap(const char *ssid);
 static void scan_and_connect_task(void *arg);
+static esp_err_t wifi_scan_collect(const wifi_scan_config_t *config,
+                                  wifi_ap_record_t **ap_list,
+                                  uint16_t *ap_count);
 
 void wifi_set_hostname(const char *device_name) {
   if (!s_sta_netif || !device_name) {
@@ -98,6 +102,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
   } else if (event_base == WIFI_EVENT &&
              event_id == WIFI_EVENT_STA_DISCONNECTED) {
     s_sta_connected = false;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     wifi_event_sta_disconnected_t *disconnected =
         (wifi_event_sta_disconnected_t *)event_data;
     ESP_LOGI(TAG, "Disconnected from AP, reason: %d", disconnected->reason);
@@ -126,6 +131,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
     s_retry_num = 0;
     s_sta_connected = true;
+    esp_timer_stop(s_retry_timer);
+    xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
     xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
 
     // Disable AP mode when STA connects
@@ -143,9 +150,10 @@ static void event_handler(void *arg, esp_event_base_t event_base,
 // to avoid overflowing the sys_evt stack.
 static void scan_and_connect_task(void *arg) {
   wifi_config_t cfg;
-  if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK &&
-      strlen((char *)cfg.sta.ssid) > 0) {
-    wifi_select_best_ap((char *)cfg.sta.ssid);
+  if (esp_wifi_get_config(WIFI_IF_STA, &cfg) == ESP_OK && cfg.sta.ssid[0]) {
+    char ssid[33] = {0};
+    memcpy(ssid, cfg.sta.ssid, sizeof(cfg.sta.ssid));
+    wifi_select_best_ap(ssid);
   }
   esp_wifi_connect();
   vTaskDelete(NULL);
@@ -163,27 +171,18 @@ static void wifi_select_best_ap(const char *ssid) {
                                .max = 0}}, // 0, 0 needed for BT co-exist
   };
 
-  esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+  uint16_t ap_count = 0;
+  wifi_ap_record_t *ap_list = NULL;
+  esp_err_t err = wifi_scan_collect(&scan_config, &ap_list, &ap_count);
   if (err != ESP_OK) {
     ESP_LOGW(TAG, "Best-AP scan failed: %s", esp_err_to_name(err));
     return;
   }
 
-  uint16_t ap_count = 0;
-  esp_wifi_scan_get_ap_num(&ap_count);
   if (ap_count == 0) {
     ESP_LOGW(TAG, "Best-AP scan: no APs found for SSID %s", ssid);
-    esp_wifi_scan_get_ap_records(&ap_count, NULL);
     return;
   }
-
-  wifi_ap_record_t *ap_list = malloc(sizeof(wifi_ap_record_t) * ap_count);
-  if (!ap_list) {
-    esp_wifi_scan_get_ap_records(&ap_count, NULL);
-    return;
-  }
-
-  esp_wifi_scan_get_ap_records(&ap_count, ap_list);
 
   // Find AP with strongest signal
   int best_idx = 0;
@@ -236,11 +235,15 @@ static void wifi_select_best_ap(const char *ssid) {
 
   // Set BSSID in the STA config to lock to the best AP
   wifi_config_t sta_cfg;
-  esp_wifi_get_config(WIFI_IF_STA, &sta_cfg);
-  memcpy(sta_cfg.sta.bssid, ap_list[best_idx].bssid, 6);
-  sta_cfg.sta.bssid_set = true;
-  esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-  s_bssid_set = true;
+  err = esp_wifi_get_config(WIFI_IF_STA, &sta_cfg);
+  if (err == ESP_OK) {
+    memcpy(sta_cfg.sta.bssid, ap_list[best_idx].bssid, 6);
+    sta_cfg.sta.bssid_set = true;
+    err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+  }
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Cannot select best AP: %s", esp_err_to_name(err));
+  }
 
   free(ap_list);
 }
@@ -251,6 +254,10 @@ static void wifi_init_base(void) {
   }
 
   s_wifi_event_group = xEventGroupCreate();
+  if (!s_scan_mutex) {
+    s_scan_mutex = xSemaphoreCreateMutex();
+  }
+  ESP_ERROR_CHECK(s_scan_mutex ? ESP_OK : ESP_ERR_NO_MEM);
 
   esp_err_t ret = esp_netif_init();
   if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
@@ -309,10 +316,13 @@ void wifi_init_apsta(const char *ap_ssid, const char *ap_password) {
   }
 
   wifi_config_t sta_config = {0};
-  strlcpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid));
-  strlcpy((char *)sta_config.sta.password, password,
-          sizeof(sta_config.sta.password));
-  sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+  /* The driver's fields may use all 32/64 bytes without a trailing NUL. */
+  memcpy(sta_config.sta.ssid, ssid,
+         strnlen(ssid, sizeof(sta_config.sta.ssid)));
+  memcpy(sta_config.sta.password, password,
+         strnlen(password, sizeof(sta_config.sta.password)));
+  sta_config.sta.threshold.authmode = password[0] ? WIFI_AUTH_WPA2_PSK
+                                                 : WIFI_AUTH_OPEN;
 
   // Configure AP and save for later re-enable
   const char *default_ssid = ap_ssid ? ap_ssid : CONFIG_DEFAULT_AP_SSID;
@@ -391,37 +401,28 @@ esp_err_t wifi_get_ip_str(char *ip_str, size_t len) {
   return err;
 }
 
-esp_err_t wifi_scan(wifi_ap_record_t **ap_list, uint16_t *ap_count) {
+/* Protect the driver's single scan result list until it has been consumed.
+ * A scan never disconnects or changes the station configuration: the HTTP
+ * caller may be using that same WiFi connection to receive these results. */
+static esp_err_t wifi_scan_collect(const wifi_scan_config_t *config,
+                                  wifi_ap_record_t **ap_list,
+                                  uint16_t *ap_count) {
   if (!ap_list || !ap_count) {
     return ESP_ERR_INVALID_ARG;
   }
-
-  // Stop any pending retry and disconnect cleanly
-  esp_timer_stop(s_retry_timer);
-  esp_wifi_disconnect();
-  vTaskDelay(pdMS_TO_TICKS(100));
-
-  // Clear BSSID lock so next connect can use a fresh scan result
-  if (s_bssid_set) {
-    wifi_config_t sta_cfg;
-    if (esp_wifi_get_config(WIFI_IF_STA, &sta_cfg) == ESP_OK) {
-      memset(sta_cfg.sta.bssid, 0, sizeof(sta_cfg.sta.bssid));
-      sta_cfg.sta.bssid_set = false;
-      esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
-    }
-    s_bssid_set = false;
+  *ap_list = NULL;
+  *ap_count = 0;
+  if (!s_wifi_initialized || !s_scan_mutex) {
+    return ESP_ERR_WIFI_NOT_INIT;
+  }
+  if (xSemaphoreTake(s_scan_mutex, 0) != pdTRUE) {
+    return ESP_ERR_WIFI_STATE;
   }
 
-  wifi_scan_config_t scan_config = {
-      .ssid = NULL,
-      .bssid = NULL,
-      .channel = 0,
-      .show_hidden = true,
-  };
-
-  esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+  esp_err_t err = esp_wifi_scan_start(config, true);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+    xSemaphoreGive(s_scan_mutex);
     return err;
   }
 
@@ -429,30 +430,41 @@ esp_err_t wifi_scan(wifi_ap_record_t **ap_list, uint16_t *ap_count) {
   err = esp_wifi_scan_get_ap_num(&number);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to get AP count: %s", esp_err_to_name(err));
-    return err;
+    goto done;
   }
 
   if (number == 0) {
-    *ap_list = NULL;
-    *ap_count = 0;
-    return ESP_OK;
+    goto done;
   }
 
   wifi_ap_record_t *aps = malloc(sizeof(wifi_ap_record_t) * number);
   if (!aps) {
-    return ESP_ERR_NO_MEM;
+    err = ESP_ERR_NO_MEM;
+    goto done;
   }
 
   err = esp_wifi_scan_get_ap_records(&number, aps);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to get AP records: %s", esp_err_to_name(err));
     free(aps);
-    return err;
+    goto done;
   }
 
   *ap_list = aps;
   *ap_count = number;
-  return ESP_OK;
+done:
+  esp_wifi_clear_ap_list();
+  xSemaphoreGive(s_scan_mutex);
+  return err;
+}
+
+esp_err_t wifi_scan(wifi_ap_record_t **ap_list, uint16_t *ap_count) {
+  wifi_scan_config_t config = {
+      .show_hidden = true,
+      .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+      .scan_time = {.active = {.min = 0, .max = 120}},
+  };
+  return wifi_scan_collect(&config, ap_list, ap_count);
 }
 
 void wifi_stop(void) {
