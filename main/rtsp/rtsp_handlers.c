@@ -585,9 +585,9 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
                        "tp=UDP\r\n"
                        "vn=65537\r\n"
                        "vs=377.40.00\r\n"
-                       "am=AudioAccessory5,1\r\n"
+                       "am=%s\r\n"
                        "deviceid=%s\r\n",
-                       device_id);
+                       settings_get_airplay_model(), device_id);
       rtsp_send_http_response(socket, conn, 200, "OK", "text/parameters", body,
                               (size_t)(n > 0 ? n : 0));
       return;
@@ -619,7 +619,7 @@ static void handle_get(int socket, rtsp_conn_t *conn, const rtsp_request_t *req,
 
     plist_dict_string(&p, "deviceid", device_id);
     plist_dict_uint(&p, "features", features);
-    plist_dict_string(&p, "model", "AudioAccessory5,1");
+    plist_dict_string(&p, "model", settings_get_airplay_model());
     plist_dict_string(&p, "protovers", "1.1");
     plist_dict_string(&p, "srcvers", "377.40.00");
     plist_dict_int(&p, "vv", protocol_version);
