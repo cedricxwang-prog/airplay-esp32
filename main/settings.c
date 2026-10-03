@@ -35,6 +35,7 @@ static const char *TAG = "settings";
 // Cached values  (defaults = 50 %)
 static float g_volume_db = -15.0f;
 static bool g_volume_loaded = false;
+static uint8_t g_airplay_icon = 0;
 
 #ifdef CONFIG_BT_A2DP_ENABLE
 static uint8_t g_bt_volume = 64; /* default: 50 % */
@@ -49,6 +50,8 @@ esp_err_t settings_init(void) {
   nvs_handle_t nvs;
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
   if (err == ESP_OK) {
+    uint8_t icon = 0;
+    if (nvs_get_u8(nvs, "airplay_icon", &icon) == ESP_OK && icon <= 1) g_airplay_icon = icon;
     int32_t vol_fixed;
     err = nvs_get_i32(nvs, NVS_KEY_VOLUME, &vol_fixed);
     if (err == ESP_OK) {
@@ -227,6 +230,27 @@ esp_err_t settings_get_wifi_password(char *password, size_t len) {
   }
 
   return err;
+}
+
+unsigned settings_get_airplay_icon(void) {
+  nvs_handle_t nvs; uint8_t mode = g_airplay_icon;
+  if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+    if (nvs_get_u8(nvs, "airplay_icon", &mode) != ESP_OK || mode > 1) mode = g_airplay_icon;
+    nvs_close(nvs);
+  }
+  return mode;
+}
+esp_err_t settings_set_airplay_icon(unsigned mode) {
+  if (mode > 1) return ESP_ERR_INVALID_ARG;
+  nvs_handle_t nvs;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+  if (err != ESP_OK) return err;
+  err = nvs_set_u8(nvs, "airplay_icon", (uint8_t)mode);
+  if (err == ESP_OK) err = nvs_commit(nvs);
+  nvs_close(nvs); return err;
+}
+const char *settings_get_airplay_model(void) {
+  return g_airplay_icon == 1 ? "AppleTV3,2" : "AudioAccessory5,1";
 }
 
 typedef struct { char ssid[33]; char password[65]; } wifi_profile_t;

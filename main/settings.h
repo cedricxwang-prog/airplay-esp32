@@ -86,6 +86,10 @@ esp_err_t settings_set_wifi_credentials(const char *ssid, const char *password);
 bool settings_has_wifi_credentials(void);
 #define SETTINGS_WIFI_PROFILES 8
 /* Returns SSIDs only; passwords remain in device storage. */
+/* 0: speaker/HomePod mini, 1: Apple TV. Reboot applies the model. */
+unsigned settings_get_airplay_icon(void);
+esp_err_t settings_set_airplay_icon(unsigned mode);
+const char *settings_get_airplay_model(void);
 size_t settings_list_wifi_profiles(char ssids[][33], size_t capacity);
 esp_err_t settings_select_wifi_profile(const char *ssid);
 
