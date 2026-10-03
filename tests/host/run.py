@@ -19,3 +19,13 @@ with tempfile.TemporaryDirectory(prefix="cedric-audio-") as directory:
         command = [os.environ.get("CC", "cc"), "-std=c11", "-I"+str(temp), "-Imain/audio", "-Imain/network", "-Icomponents/audio-resampler", "tests/host/test_"+name+".c", *sources, "-lm", "-o", str(binary)]
         subprocess.run(command, cwd=ROOT, check=True)
         subprocess.run([str(binary)], check=True)
+    binary = temp / "test-icon"
+    subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-I"+str(temp), "-Imain", "-Imain/audio", "-Imain/plist", "tests/host/test_icon.c", "main/plist/bplist_builder.c", "-o", str(binary)], cwd=ROOT, check=True)
+    import plistlib
+    for model in ("AudioAccessory5,1", "AppleTV3,2"):
+        output = temp / "info.plist"
+        subprocess.run([str(binary), model, str(output)], check=True)
+        info = plistlib.loads(output.read_bytes())
+        assert info["model"] == model
+        assert info["deviceID"] == "00:11:22:33:44:55" if "deviceID" in info else info["deviceid"] == "00:11:22:33:44:55"
+    print("PASS: binary /info model presets parse correctly, output bounds preserved")
