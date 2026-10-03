@@ -18,6 +18,14 @@
 
 ---
 
+## Cedric fork — 0.2.4 by cedric
+
+下载本分支固件：[0.2.4 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.4-cedric.1)。[Release Note](RELEASE-NOTES-0.2.4.md) 列出相对上游的代码变化、测试及硬件要求。
+
+WebUI 支持中英文：扫描 WiFi → 点选网络 → 输入密码连接；已保存网络可复用密码，重启并确认实际连接后显示“已连接”。扫描保持原 WiFi 关联，不再主动断线。
+
+The release contains an OTA application image for the generic ESP32-S3 with 16 MB flash and the configured I2S wiring. Upload the BIN through the device's firmware update page, and upload `index.html` separately to `/api/fs/upload?path=/spiffs/www/index.html` with a raw POST body. The browser installer linked below installs upstream firmware. See the release note for matching firmware/output settings and synchronization test limits.
+
 ## What is this?
 
 This turns a cheap ESP32 board into a wireless AirPlay 2 speaker. Plug it into any
@@ -48,7 +56,7 @@ pin header, roughly $10 total, and no soldering. See the
 Building from source:
 
 ```bash
-git clone --recursive https://github.com/rbouteiller/airplay-esp32
+git clone --recursive https://github.com/cedricxwang-prog/airplay-esp32
 cd airplay-esp32
 pio run -e esp32s3 -t upload
 pio run -e esp32s3 -t uploadfs   # required — writes the web UI to SPIFFS
