@@ -84,6 +84,10 @@ esp_err_t settings_set_wifi_credentials(const char *ssid, const char *password);
  * @return true if credentials exist, false otherwise
  */
 bool settings_has_wifi_credentials(void);
+#define SETTINGS_WIFI_PROFILES 8
+/* Returns SSIDs only; passwords remain in device storage. */
+size_t settings_list_wifi_profiles(char ssids[][33], size_t capacity);
+esp_err_t settings_select_wifi_profile(const char *ssid);
 
 /**
  * Get device name (returns default if none saved)

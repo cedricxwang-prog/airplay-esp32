@@ -229,6 +229,67 @@ esp_err_t settings_get_wifi_password(char *password, size_t len) {
   return err;
 }
 
+typedef struct { char ssid[33]; char password[65]; } wifi_profile_t;
+static esp_err_t load_wifi_profiles(nvs_handle_t nvs, wifi_profile_t *profiles) {
+  memset(profiles, 0, sizeof(wifi_profile_t) * SETTINGS_WIFI_PROFILES);
+  size_t bytes = sizeof(wifi_profile_t) * SETTINGS_WIFI_PROFILES;
+  esp_err_t err = nvs_get_blob(nvs, "wifi_profiles", profiles, &bytes);
+  if (err == ESP_OK && bytes != sizeof(wifi_profile_t) * SETTINGS_WIFI_PROFILES)
+    return ESP_ERR_INVALID_SIZE;
+  if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) return err;
+  if (err == ESP_ERR_NVS_NOT_FOUND) {
+    size_t len = sizeof(profiles[0].ssid);
+    if (nvs_get_str(nvs, NVS_KEY_WIFI_SSID, profiles[0].ssid, &len) == ESP_OK) {
+      len = sizeof(profiles[0].password);
+      if (nvs_get_str(nvs, NVS_KEY_WIFI_PASSWORD, profiles[0].password, &len) != ESP_OK)
+        memset(&profiles[0], 0, sizeof(profiles[0]));
+    }
+  }
+  for (size_t i = 0; i < SETTINGS_WIFI_PROFILES; i++) {
+    if (!memchr(profiles[i].ssid, 0, sizeof(profiles[i].ssid)) ||
+        !memchr(profiles[i].password, 0, sizeof(profiles[i].password)))
+      return ESP_ERR_INVALID_SIZE;
+  }
+  return ESP_OK;
+}
+
+size_t settings_list_wifi_profiles(char ssids[][33], size_t capacity) {
+  if (!ssids || !capacity) return 0;
+  wifi_profile_t profiles[SETTINGS_WIFI_PROFILES];
+  nvs_handle_t nvs;
+  if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return 0;
+  esp_err_t err = load_wifi_profiles(nvs, profiles);
+  nvs_close(nvs);
+  size_t count = 0;
+  if (err == ESP_OK) {
+    for (size_t i = 0; i < SETTINGS_WIFI_PROFILES && count < capacity; i++)
+      if (profiles[i].ssid[0]) strlcpy(ssids[count++], profiles[i].ssid, 33);
+  }
+  memset(profiles, 0, sizeof(profiles));
+  return count;
+}
+
+esp_err_t settings_select_wifi_profile(const char *ssid) {
+  if (!ssid || !*ssid) return ESP_ERR_INVALID_ARG;
+  wifi_profile_t profiles[SETTINGS_WIFI_PROFILES];
+  nvs_handle_t nvs;
+  esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+  if (err != ESP_OK) return err;
+  err = load_wifi_profiles(nvs, profiles);
+  nvs_close(nvs);
+  if (err == ESP_OK) {
+    err = ESP_ERR_NOT_FOUND;
+    for (size_t i = 0; i < SETTINGS_WIFI_PROFILES; i++) {
+      if (strcmp(profiles[i].ssid, ssid) == 0) {
+        err = settings_set_wifi_credentials(ssid, profiles[i].password);
+        break;
+      }
+    }
+  }
+  memset(profiles, 0, sizeof(profiles));
+  return err;
+}
+
 esp_err_t settings_set_wifi_credentials(const char *ssid,
                                         const char *password) {
   if (!ssid || strlen(ssid) == 0 || strlen(ssid) > MAX_WIFI_SSID_LEN) {
@@ -245,7 +306,21 @@ esp_err_t settings_set_wifi_credentials(const char *ssid,
     return err;
   }
 
-  err = nvs_set_str(nvs, NVS_KEY_WIFI_SSID, ssid);
+  wifi_profile_t profiles[SETTINGS_WIFI_PROFILES];
+  err = load_wifi_profiles(nvs, profiles);
+  if (err != ESP_OK) { nvs_close(nvs); return err; }
+  size_t slot = SETTINGS_WIFI_PROFILES;
+  for (size_t i = 0; i < SETTINGS_WIFI_PROFILES; i++) {
+    if (strcmp(profiles[i].ssid, ssid) == 0) { slot = i; break; }
+    if (!profiles[i].ssid[0] && slot == SETTINGS_WIFI_PROFILES) slot = i;
+  }
+  /* Preserve saved networks rather than silently evicting credentials. */
+  if (slot == SETTINGS_WIFI_PROFILES) { nvs_close(nvs); return ESP_ERR_NO_MEM; }
+  strlcpy(profiles[slot].ssid, ssid, sizeof(profiles[slot].ssid));
+  strlcpy(profiles[slot].password, password, sizeof(profiles[slot].password));
+  err = nvs_set_blob(nvs, "wifi_profiles", profiles, sizeof(profiles));
+  memset(profiles, 0, sizeof(profiles));
+  if (err == ESP_OK) err = nvs_set_str(nvs, NVS_KEY_WIFI_SSID, ssid);
   if (err == ESP_OK) {
     err = nvs_set_str(nvs, NVS_KEY_WIFI_PASSWORD, password);
   }
