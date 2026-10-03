@@ -18,11 +18,13 @@
 
 ---
 
-## Cedric fork — 0.2.4 by cedric
+## Cedric fork — 0.2.5 by cedric
 
-下载本分支固件：[0.2.4 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.4-cedric.1)。[Release Note](RELEASE-NOTES-0.2.4.md) 列出相对上游的代码变化、测试及硬件要求。
+下载本分支固件：[0.2.5 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.5-cedric.1)。[Release Note](RELEASE-NOTES-0.2.5.md) 列出本次图标分类改动与验证；[0.2.4 Note](RELEASE-NOTES-0.2.4.md) 记录相对上游的音频与 WiFi 优化。
 
 WebUI 支持中英文：扫描 WiFi → 点选网络 → 输入密码连接；已保存网络可复用密码，重启并确认实际连接后显示“已连接”。扫描保持原 WiFi 关联，不再主动断线。
+
+AirPlay 图标增加“通用音箱（类似 Sonos）”，保留 HomePod mini 与 Apple TV。选择并保存后重启应用；iOS/macOS 决定最终图案。Generic speaker mode advertises a third-party speaker identity with matching Bonjour and `/info` metadata; it does not claim to be a Sonos product.
 
 The release contains an OTA application image for the generic ESP32-S3 with 16 MB flash and the configured I2S wiring. Upload the BIN through the device's firmware update page, and upload `index.html` separately to `/api/fs/upload?path=/spiffs/www/index.html` with a raw POST body. The browser installer linked below installs upstream firmware. See the release note for matching firmware/output settings and synchronization test limits.
 
