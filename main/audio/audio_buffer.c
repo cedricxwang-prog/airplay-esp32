@@ -5,6 +5,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/task.h"
 
 static const char *TAG = "audio_buf";
 
@@ -58,8 +59,7 @@ static bool audio_buffer_queue_chunk(audio_buffer_t *buffer,
             (buffer->count - 1) * sizeof(uint16_t));
     buffer->count--;
     buffer->free_stack[buffer->free_top++] = victim;
-    /* Take one token from the semaphore to keep it in sync */
-    xSemaphoreTakeFromISR(buffer->data_ready, NULL);
+
   }
 
   if (buffer->free_top == 0) {
@@ -145,8 +145,8 @@ esp_err_t audio_buffer_init(audio_buffer_t *buffer) {
     buffer->free_stack[i] = (uint16_t)i;
   }
 
-  /* Counting semaphore: max = capacity, initial = 0 */
-  buffer->data_ready = xSemaphoreCreateCounting(buffer->capacity, 0);
+  /* Binary wake hint; count under the queue lock is authoritative. */
+  buffer->data_ready = xSemaphoreCreateBinary();
   if (!buffer->data_ready) {
     ESP_LOGE(TAG, "Failed to create semaphore");
     audio_buffer_deinit(buffer);
@@ -220,9 +220,8 @@ void audio_buffer_flush(audio_buffer_t *buffer) {
 
   portEXIT_CRITICAL(&buffer->lock);
 
-  /* Drain the semaphore */
-  while (xSemaphoreTake(buffer->data_ready, 0) == pdTRUE) {
-  }
+  /* Leave the wake hint alone: a concurrent producer may already have
+   * published a new frame. Consumers always check count under the lock. */
 }
 
 /* ---------- frame count ---------- */
@@ -321,17 +320,21 @@ bool audio_buffer_take(audio_buffer_t *buffer, void **item, size_t *item_size,
     return false;
   }
 
-  /* Block until a frame is available */
-  if (xSemaphoreTake(buffer->data_ready, ticks) != pdTRUE) {
-    return false;
-  }
-
-  portENTER_CRITICAL(&buffer->lock);
-
-  if (buffer->count == 0) {
-    /* Shouldn't happen if semaphore is in sync, but guard anyway */
+  TimeOut_t timeout;
+  TickType_t remaining = ticks;
+  vTaskSetTimeOutState(&timeout);
+  for (;;) {
+    portENTER_CRITICAL(&buffer->lock);
+    if (buffer->count > 0) {
+      break;
+    }
     portEXIT_CRITICAL(&buffer->lock);
-    return false;
+    if (remaining == 0 ||
+        xSemaphoreTake(buffer->data_ready, remaining) != pdTRUE) {
+      return false;
+    }
+    /* Even on the deadline, inspect the queue once after a wakeup. */
+    if (xTaskCheckForTimeOut(&timeout, &remaining) == pdTRUE) remaining = 0;
   }
 
   uint16_t slot = buffer->sorted[0];
@@ -411,8 +414,8 @@ bool audio_buffer_queue_decoded(audio_buffer_t *buffer, audio_stats_t *stats,
     return false;
   }
 
-  if (channels <= 0) {
-    channels = 2;
+  if (channels < 1 || channels > AUDIO_MAX_CHANNELS || !buffer->pool) {
+    return false;
   }
 
   size_t offset = 0;

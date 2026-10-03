@@ -46,3 +46,6 @@ void audio_resample_destroy(void);
  * Get the maximum number of output frames for a given input frame count.
  */
 size_t audio_resample_max_output(size_t in_frames);
+
+/** Group delay of the active sinc filter, in microseconds. */
+uint32_t audio_resample_get_latency_us(void);

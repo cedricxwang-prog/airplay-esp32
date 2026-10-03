@@ -81,12 +81,17 @@ static bool aac_has_adts_header(const uint8_t *data, size_t len) {
 
 static void build_adts_header(uint8_t *header, size_t frame_len,
                               int sample_rate, int channels) {
-  (void)sample_rate;
-  (void)channels;
-
+  static const int rates[] = {96000, 88200, 64000, 48000, 44100, 32000,
+                             24000, 22050, 16000, 12000, 11025, 8000, 7350};
   int profile = 2;
   int freq_idx = 4;
-  int chan_cfg = 2;
+  for (size_t i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
+    if (sample_rate == rates[i]) {
+      freq_idx = (int)i;
+      break;
+    }
+  }
+  int chan_cfg = channels;
   int packet_len = (int)(frame_len + ADTS_HEADER_LEN);
 
   header[0] = 0xFF;
@@ -100,6 +105,13 @@ static void build_adts_header(uint8_t *header, size_t frame_len,
 
 audio_decoder_t *audio_decoder_create(const audio_decoder_config_t *config) {
   if (!config) {
+    return NULL;
+  }
+
+  if (config->format.channels < 1 || config->format.channels > 2 ||
+      config->format.sample_rate < 8000 ||
+      (config->format.bits_per_sample && config->format.bits_per_sample != 16)) {
+    ESP_LOGE(TAG, "Unsupported PCM format");
     return NULL;
   }
 

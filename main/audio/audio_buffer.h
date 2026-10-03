@@ -39,7 +39,7 @@ typedef struct {
   int capacity;                 // Max frames
   size_t slot_size;             // BYTES_PER_FRAME
   portMUX_TYPE lock;            // Spinlock for count/index manipulation
-  SemaphoreHandle_t data_ready; // Counting semaphore (blocks consumer)
+  SemaphoreHandle_t data_ready; // Binary wake hint; count is authoritative
   uint8_t *frame_buffer;        // Temp assembly buffer
   int16_t *decode_buffer;       // Decode buffer pointer
   size_t decode_capacity_samples;

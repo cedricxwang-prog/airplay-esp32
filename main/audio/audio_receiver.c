@@ -6,6 +6,8 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "esp_timer.h"
 
 #include "audio_buffer.h"
@@ -21,6 +23,16 @@
 #define DEFAULT_BITS_PER_SAMPLE 16
 #define DEFAULT_FRAME_SIZE      352
 #define DECRYPT_BUFFER_SIZE     8192
+
+// Task mutex (with priority inheritance), never held by an ISR.
+// Recursive because public control functions call one another.
+static SemaphoreHandle_t receiver_state_mutex;
+static void receiver_state_take(void) {
+  if (receiver_state_mutex) xSemaphoreTakeRecursive(receiver_state_mutex, portMAX_DELAY);
+}
+static void receiver_state_give(void) {
+  if (receiver_state_mutex) xSemaphoreGiveRecursive(receiver_state_mutex);
+}
 
 static const char *TAG = "audio_recv";
 
@@ -54,6 +66,10 @@ static void audio_receiver_copy_stream_state(audio_stream_t *dst,
 }
 
 esp_err_t audio_receiver_init(void) {
+  if (!receiver_state_mutex) {
+    receiver_state_mutex = xSemaphoreCreateRecursiveMutex();
+    if (!receiver_state_mutex) return ESP_ERR_NO_MEM;
+  }
   if (receiver.buffer.pool) {
     return ESP_OK;
   }
@@ -167,11 +183,11 @@ void audio_receiver_set_encryption(const audio_encrypt_t *encrypt) {
   }
 }
 
-void audio_receiver_set_playout_latency_samples(uint32_t latency_samples) {
+static void audio_receiver_set_playout_latency_samples_locked(uint32_t latency_samples) {
   audio_timing_set_playout_latency(&receiver.timing, latency_samples);
 }
 
-void audio_receiver_set_output_latency_us(uint32_t latency_us) {
+static void audio_receiver_set_output_latency_us_locked(uint32_t latency_us) {
   if (!receiver.stream) {
     return;
   }
@@ -191,7 +207,7 @@ uint32_t audio_receiver_get_advertised_latency_us(void) {
   return audio_timing_get_advertised_latency(&receiver.timing);
 }
 
-void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
+static void audio_receiver_set_anchor_time_locked(uint64_t clock_id, uint64_t network_time_ns,
                                     uint32_t rtp_time) {
   if (!receiver.stream) {
     return;
@@ -366,7 +382,7 @@ void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
                           network_time_ns, rtp_time);
 }
 
-void audio_receiver_set_playing(bool playing) {
+static void audio_receiver_set_playing_locked(bool playing) {
   audio_timing_set_playing(&receiver.timing, playing);
   if (!playing) {
     receiver.blocks_read_in_sequence = 0;
@@ -402,11 +418,11 @@ void audio_receiver_set_playing(bool playing) {
   }
 }
 
-void audio_receiver_reset_timing(void) {
+static void audio_receiver_reset_timing_locked(void) {
   audio_timing_reset(&receiver.timing);
 }
 
-bool audio_receiver_is_playing(void) {
+static bool audio_receiver_is_playing_locked(void) {
   return receiver.timing.playing;
 }
 
@@ -574,7 +590,7 @@ void audio_receiver_get_stats(audio_stats_t *stats) {
   memcpy(stats, &receiver.stats, sizeof(receiver.stats));
 }
 
-size_t audio_receiver_read(int16_t *buffer, size_t samples) {
+static size_t audio_receiver_read_locked(int16_t *buffer, size_t samples) {
   if (!receiver.buffer.pool || !buffer || samples == 0) {
     return 0;
   }
@@ -583,12 +599,12 @@ size_t audio_receiver_read(int16_t *buffer, size_t samples) {
                            &receiver.stats, buffer, samples);
 }
 
-bool audio_receiver_has_data(void) {
+static bool audio_receiver_has_data_locked(void) {
   int buffered_frames = audio_buffer_get_frame_count(&receiver.buffer);
   return buffered_frames > 0 || receiver.timing.pending_valid;
 }
 
-void audio_receiver_flush(void) {
+static void audio_receiver_flush_locked(void) {
   // Flush is an explicit reset — clear all timing state including pause
   // tracking.  The sender will provide fresh anchor times after flush.
   // Also disarm any pending deferred flush so it does not fire on the
@@ -605,7 +621,7 @@ void audio_receiver_flush(void) {
   receiver.blocks_read_in_sequence = 1;
 }
 
-void audio_receiver_seek_flush(void) {
+static void audio_receiver_seek_flush_locked(void) {
   // Mid-stream seek flush (FLUSH / immediate FLUSHBUFFERED).  Like
   // audio_receiver_flush() but sets timing.quick_start so audio_timing_read
   // starts as soon as 1 frame is available, with normal anchor-based timing.
@@ -623,7 +639,7 @@ void audio_receiver_seek_flush(void) {
   receiver.discard_all_until_anchor = true;
 }
 
-void audio_receiver_set_deferred_flush(uint32_t flush_until_ts) {
+static void audio_receiver_set_deferred_flush_locked(uint32_t flush_until_ts) {
   if (!receiver.stream) {
     return;
   }
@@ -635,7 +651,7 @@ void audio_receiver_set_deferred_flush(uint32_t flush_until_ts) {
            flush_until_ts);
 }
 
-void audio_receiver_pause(void) {
+static void audio_receiver_pause_locked(void) {
   // Stop the consumer.  The receiver tasks keep running so the audio buffer
   // continues to fill with pre-buffered audio — TCP back-pressure naturally
   // throttles the sender.  On resume the phone sends a fresh
@@ -647,4 +663,81 @@ void audio_receiver_pause(void) {
 
 uint16_t audio_receiver_get_buffered_port(void) {
   return receiver.buffered_port;
+}
+
+/* Public entry points share the same task-context state lock. */
+void audio_receiver_set_playout_latency_samples(uint32_t latency_samples) {
+  receiver_state_take();
+  audio_receiver_set_playout_latency_samples_locked(latency_samples);
+  receiver_state_give();
+}
+
+void audio_receiver_set_output_latency_us(uint32_t latency_us) {
+  receiver_state_take();
+  audio_receiver_set_output_latency_us_locked(latency_us);
+  receiver_state_give();
+}
+
+void audio_receiver_set_anchor_time(uint64_t clock_id, uint64_t network_time_ns,
+                                    uint32_t rtp_time) {
+  receiver_state_take();
+  audio_receiver_set_anchor_time_locked(clock_id, network_time_ns, rtp_time);
+  receiver_state_give();
+}
+
+void audio_receiver_set_playing(bool playing) {
+  receiver_state_take();
+  audio_receiver_set_playing_locked(playing);
+  receiver_state_give();
+}
+
+void audio_receiver_reset_timing(void) {
+  receiver_state_take();
+  audio_receiver_reset_timing_locked();
+  receiver_state_give();
+}
+
+bool audio_receiver_is_playing(void) {
+  receiver_state_take();
+  bool result = audio_receiver_is_playing_locked();
+  receiver_state_give();
+  return result;
+}
+
+size_t audio_receiver_read(int16_t *buffer, size_t samples) {
+  receiver_state_take();
+  size_t result = audio_receiver_read_locked(buffer, samples);
+  receiver_state_give();
+  return result;
+}
+
+bool audio_receiver_has_data(void) {
+  receiver_state_take();
+  bool result = audio_receiver_has_data_locked();
+  receiver_state_give();
+  return result;
+}
+
+void audio_receiver_flush(void) {
+  receiver_state_take();
+  audio_receiver_flush_locked();
+  receiver_state_give();
+}
+
+void audio_receiver_seek_flush(void) {
+  receiver_state_take();
+  audio_receiver_seek_flush_locked();
+  receiver_state_give();
+}
+
+void audio_receiver_set_deferred_flush(uint32_t flush_until_ts) {
+  receiver_state_take();
+  audio_receiver_set_deferred_flush_locked(flush_until_ts);
+  receiver_state_give();
+}
+
+void audio_receiver_pause(void) {
+  receiver_state_take();
+  audio_receiver_pause_locked();
+  receiver_state_give();
 }

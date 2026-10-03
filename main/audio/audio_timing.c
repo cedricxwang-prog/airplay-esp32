@@ -5,6 +5,7 @@
 #include "audio_timing.h"
 
 #include "audio_output.h"
+#include "audio_resample.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "ntp_clock.h"
@@ -212,7 +213,8 @@ static bool compute_early_us(const audio_timing_t *timing,
     now_us = esp_timer_get_time();
     pipeline_us = audio_output_get_hardware_latency_us();
   }
-  target_ns -= (int64_t)(pipeline_us + PIPELINE_LATENCY_US) * 1000LL;
+  target_ns -= (int64_t)(pipeline_us + PIPELINE_LATENCY_US +
+                         audio_resample_get_latency_us()) * 1000LL;
 
   *early_us = (target_ns / 1000LL) - now_us;
 
@@ -422,9 +424,17 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
   // scheduled play time, just like shairport-sync.
   // Normal startup waits for target_buffer_frames to build jitter margin.
   if (!timing->playout_started && !timing->pending_valid) {
-    int required = timing->quick_start ? 1 : (int)timing->target_buffer_frames;
+    // quick_start (after a seek/track change) still waits for a few frames:
+    // starting from a single frame starved the output stage when the phone's
+    // pre-roll drain emptied the buffer right at playout start (16 output
+    // underruns observed at track starts).
+    int required =
+        timing->quick_start ? 4 : (int)timing->target_buffer_frames;
     if (buffered_frames < required) {
-      return 0;
+      // Output silence, not nothing: returning 0 starves the output DMA ring
+      // and counts underruns — audible glitches before playback starts.
+      memset(out, 0, samples * AUDIO_OUT_CHANNELS * sizeof(int16_t));
+      return samples;
     }
     // Wait for anchor before playing.
     // Normal startup: allow a 1-second fallback so a stream with no anchor
@@ -435,7 +445,10 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
         timing->ready_time_us = now_us;
       }
       if (now_us - timing->ready_time_us < 1000000) {
-        return 0; // Still waiting for anchor
+        // Still waiting for anchor — emit silence rather than starving the
+        // output stage (see above).
+        memset(out, 0, samples * AUDIO_OUT_CHANNELS * sizeof(int16_t));
+        return samples;
       }
       // Waited 1 second, no anchor - proceed without sync
     }
@@ -529,6 +542,18 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
 
     if (frame_samples > samples) {
       frame_samples = samples;
+    }
+
+    if (timing->expected_rtp_valid &&
+        (int32_t)(hdr->rtp_timestamp + hdr->samples_per_channel -
+                  timing->expected_rtp) <= 0) {
+      if (from_pending) {
+        timing->pending_valid = false;
+        timing->pending_frame_len = 0;
+      } else {
+        audio_buffer_return(buffer, item);
+      }
+      continue;
     }
 
     // Deferred flush check (AirPlay 2 FLUSHBUFFERED with flushFromSeq):
@@ -662,7 +687,8 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
         int64_t frame_period_us =
             ((int64_t)frame_samples * 1000000LL) / format->sample_rate;
         int64_t strict_us = frame_period_us / 2;
-        int64_t release_us = (from_pending || dropped_late || gap)
+        int64_t release_us = (from_pending || dropped_late || gap ||
+                                  !timing->playout_started)
                                  ? strict_us
                                  : timing_threshold_us;
 
@@ -938,6 +964,15 @@ size_t audio_timing_read(audio_timing_t *timing, audio_buffer_t *buffer,
           }
           o++;
         }
+      }
+    }
+
+    if (out_ch == 1) {
+      // Expand backwards so unread mono samples are not overwritten.
+      for (size_t i = out_samples; i-- > 0;) {
+        int16_t mono = out[i];
+        out[i * 2] = mono;
+        out[i * 2 + 1] = mono;
       }
     }
 

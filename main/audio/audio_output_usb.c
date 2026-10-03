@@ -11,6 +11,7 @@
  */
 
 #include "audio_output.h"
+#include "playback_control.h"
 
 #include "audio_receiver.h"
 #include "audio_resample.h"
@@ -36,7 +37,7 @@
 
 /* Max output frames after resampling one input frame */
 #define MAX_RESAMPLE_FRAMES \
-  ((size_t)((FRAME_SAMPLES + 2) * ((double)OUTPUT_RATE / 44100) + 16))
+  ((size_t)((FRAME_SAMPLES + 2) * ((double)OUTPUT_RATE / 8000) + 16))
 
 #if CONFIG_FREERTOS_UNICORE
 #define PLAYBACK_CORE 0
@@ -76,6 +77,10 @@ static esp_err_t usb_input_cb(uint8_t *buf, size_t len, size_t *bytes_read,
 /* ── Volume ────────────────────────────────────────────────────────── */
 
 static void apply_volume(int16_t *buf, size_t n) {
+  if (playback_control_is_muted()) {
+    memset(buf, 0, n * sizeof(*buf));
+    return;
+  }
 #ifndef CONFIG_DAC_CONTROLS_VOLUME
   // Ramp toward the target gain instead of applying volume changes
   // instantly.  An abrupt gain step mid-waveform is a discontinuity scaled

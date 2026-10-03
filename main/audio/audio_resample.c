@@ -2,7 +2,6 @@
 
 #include "sdkconfig.h"
 
-#if CONFIG_OUTPUT_SAMPLE_RATE_HZ != 44100
 
 #include "resampler.h"
 
@@ -28,22 +27,28 @@ static float *float_out;
 static size_t float_in_cap; /* in samples (frames * channels) */
 static size_t float_out_cap;
 
-static void ensure_float_bufs(size_t in_samples, size_t out_samples) {
+static bool ensure_float_bufs(size_t in_samples, size_t out_samples) {
   if (in_samples > float_in_cap) {
-    free(float_in);
+    float *next = realloc(float_in, in_samples * sizeof(float));
+    if (!next) return false;
+    float_in = next;
     float_in_cap = in_samples;
-    float_in = malloc(float_in_cap * sizeof(float));
   }
   if (out_samples > float_out_cap) {
-    free(float_out);
+    float *next = realloc(float_out, out_samples * sizeof(float));
+    if (!next) return false;
+    float_out = next;
     float_out_cap = out_samples;
-    float_out = malloc(float_out_cap * sizeof(float));
   }
+  return true;
 }
 
 bool audio_resample_init(uint32_t input_rate, uint32_t output_rate,
                          int channels) {
   audio_resample_destroy();
+  if (!input_rate || !output_rate || channels < 1 || channels > 2) {
+    return false;
+  }
 
   if (input_rate == output_rate) {
     active = false;
@@ -87,9 +92,7 @@ bool audio_resample_init(uint32_t input_rate, uint32_t output_rate,
   /* Pre-allocate float buffers for typical frame size (352 + margin) */
   size_t typical_in = 400 * (size_t)channels;
   size_t typical_out = (size_t)(400.0 * fixed_ratio + 16) * (size_t)channels;
-  ensure_float_bufs(typical_in, typical_out);
-
-  if (!float_in || !float_out) {
+  if (!ensure_float_bufs(typical_in, typical_out)) {
     ESP_LOGE(TAG, "Failed to allocate conversion buffers");
     audio_resample_destroy();
     return false;
@@ -105,13 +108,15 @@ bool audio_resample_init(uint32_t input_rate, uint32_t output_rate,
 
 size_t audio_resample_process(const int16_t *in, size_t in_frames, int16_t *out,
                               size_t out_capacity) {
-  if (!resampler || !active) {
+  if (!resampler || !active || !in || !out || !in_frames || !out_capacity) {
     return 0;
   }
 
   size_t in_samples = in_frames * (size_t)current_channels;
   size_t out_samples = out_capacity * (size_t)current_channels;
-  ensure_float_bufs(in_samples, out_samples);
+  if (!ensure_float_bufs(in_samples, out_samples)) {
+    return 0;
+  }
 
   /* int16 → float [-1.0, 1.0) */
   for (size_t i = 0; i < in_samples; i++) {
@@ -169,34 +174,10 @@ size_t audio_resample_max_output(size_t in_frames) {
   return (size_t)((double)in_frames * fixed_ratio + 2);
 }
 
-#else /* CONFIG_OUTPUT_SAMPLE_RATE_HZ == 44100 — no resampling needed */
 
-bool audio_resample_init(uint32_t input_rate, uint32_t output_rate,
-                         int channels) {
-  (void)input_rate;
-  (void)output_rate;
-  (void)channels;
-  return true;
+uint32_t audio_resample_get_latency_us(void) {
+  return active && current_input_rate
+      ? (uint32_t)((uint64_t)(RESAMPLER_NUM_TAPS / 2) * 1000000ULL /
+                   current_input_rate)
+      : 0;
 }
-
-size_t audio_resample_process(const int16_t *in, size_t in_frames, int16_t *out,
-                              size_t out_capacity) {
-  (void)in;
-  (void)out;
-  (void)out_capacity;
-  return in_frames;
-}
-
-bool audio_resample_is_active(void) {
-  return false;
-}
-void audio_resample_reset(void) {
-}
-void audio_resample_destroy(void) {
-}
-
-size_t audio_resample_max_output(size_t in_frames) {
-  return in_frames;
-}
-
-#endif
