@@ -7,12 +7,23 @@
 #include <unistd.h>
 
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "esp_timer.h"
 #include "freertos/task.h"
 
 #include "ptp_clock.h"
 #include "spiram_task.h"
+
+// Task mutex (with priority inheritance), never held by an ISR.
+// Recursive because public control functions call one another.
+static SemaphoreHandle_t clock_state_mutex;
+static void clock_state_take(void) {
+  if (clock_state_mutex) xSemaphoreTakeRecursive(clock_state_mutex, portMAX_DELAY);
+}
+static void clock_state_give(void) {
+  if (clock_state_mutex) xSemaphoreGiveRecursive(clock_state_mutex);
+}
 
 static const char *TAG = "ptp_clock";
 
@@ -448,7 +459,9 @@ static void ptp_task(void *pvParameters) {
       if (ptp.event_socket >= 0 && FD_ISSET(ptp.event_socket, &read_fds)) {
         ssize_t len = recv(ptp.event_socket, buffer, sizeof(buffer), 0);
         if (len > 0) {
+          clock_state_take();
           process_ptp_message(buffer, (size_t)len, true);
+          clock_state_give();
         }
       }
 
@@ -456,7 +469,9 @@ static void ptp_task(void *pvParameters) {
       if (ptp.general_socket >= 0 && FD_ISSET(ptp.general_socket, &read_fds)) {
         ssize_t len = recv(ptp.general_socket, buffer, sizeof(buffer), 0);
         if (len > 0) {
+          clock_state_take();
           process_ptp_message(buffer, (size_t)len, false);
+          clock_state_give();
         }
       }
     }
@@ -477,6 +492,10 @@ static void ptp_task(void *pvParameters) {
 }
 
 esp_err_t ptp_clock_init(void) {
+  if (!clock_state_mutex) {
+    clock_state_mutex = xSemaphoreCreateRecursiveMutex();
+    if (!clock_state_mutex) return ESP_ERR_NO_MEM;
+  }
   if (ptp.running) {
     return ESP_ERR_INVALID_STATE;
   }
@@ -542,7 +561,7 @@ void ptp_clock_stop(void) {
   task_free_spiram(&ptp.task_mem);
 }
 
-void ptp_clock_clear(void) {
+static void ptp_clock_clear_locked(void) {
   ptp.locked = false;
   ptp.lock_start_ms = 0;
   ptp.lock_candidate_start_ms = 0;
@@ -565,7 +584,7 @@ void ptp_clock_clear(void) {
   ptp.expected_clock_id = 0;
 }
 
-void ptp_clock_notify_resume(uint32_t pause_duration_ms) {
+static void ptp_clock_notify_resume_locked(uint32_t pause_duration_ms) {
   if (pause_duration_ms < PTP_LONG_PAUSE_THRESHOLD_MS) {
     return; // drift too small to matter
   }
@@ -588,7 +607,7 @@ void ptp_clock_notify_resume(uint32_t pause_duration_ms) {
            (float)pause_duration_ms * 50.0f / 1000000.0f);
 }
 
-bool ptp_clock_is_locked(void) {
+static bool ptp_clock_is_locked_locked(void) {
   if (ptp.locked && ptp.last_sync_ms > 0) {
     uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
     if ((now_ms - ptp.last_sync_ms) > LOCK_TIMEOUT_MS) {
@@ -601,16 +620,16 @@ bool ptp_clock_is_locked(void) {
   return ptp.locked;
 }
 
-uint64_t ptp_clock_get_time_ns(void) {
+static uint64_t ptp_clock_get_time_ns_locked(void) {
   int64_t local_ns = get_local_time_ns();
   return (uint64_t)(local_ns + ptp.filtered_offset_ns);
 }
 
-int64_t ptp_clock_get_offset_ns(void) {
+static int64_t ptp_clock_get_offset_ns_locked(void) {
   return ptp.filtered_offset_ns;
 }
 
-void ptp_clock_set_master_clock_id(uint64_t clock_id) {
+static void ptp_clock_set_master_clock_id_locked(uint64_t clock_id) {
   if (clock_id == ptp.expected_clock_id) {
     return;
   }
@@ -631,11 +650,12 @@ void ptp_clock_set_master_clock_id(uint64_t clock_id) {
   ptp.awaiting_followup = false;
 }
 
-uint64_t ptp_clock_get_master_clock_id(void) {
+static uint64_t ptp_clock_get_master_clock_id_locked(void) {
   return ptp.expected_clock_id;
 }
 
-void ptp_clock_get_stats(ptp_stats_t *stats) {
+static void ptp_clock_get_stats_locked(ptp_stats_t *stats) {
+  if (!stats) return;
   stats->sync_count = ptp.sync_count;
   stats->followup_count = ptp.followup_count;
   // last_offset_ns previously reported previous_offset, which is itself a
@@ -651,4 +671,57 @@ void ptp_clock_get_stats(ptp_stats_t *stats) {
   } else {
     stats->lock_time_ms = 0;
   }
+}
+
+/* Public entry points share the same task-context state lock. */
+void ptp_clock_clear(void) {
+  clock_state_take();
+  ptp_clock_clear_locked();
+  clock_state_give();
+}
+
+void ptp_clock_notify_resume(uint32_t pause_duration_ms) {
+  clock_state_take();
+  ptp_clock_notify_resume_locked(pause_duration_ms);
+  clock_state_give();
+}
+
+bool ptp_clock_is_locked(void) {
+  clock_state_take();
+  bool result = ptp_clock_is_locked_locked();
+  clock_state_give();
+  return result;
+}
+
+uint64_t ptp_clock_get_time_ns(void) {
+  clock_state_take();
+  uint64_t result = ptp_clock_get_time_ns_locked();
+  clock_state_give();
+  return result;
+}
+
+int64_t ptp_clock_get_offset_ns(void) {
+  clock_state_take();
+  int64_t result = ptp_clock_get_offset_ns_locked();
+  clock_state_give();
+  return result;
+}
+
+void ptp_clock_set_master_clock_id(uint64_t clock_id) {
+  clock_state_take();
+  ptp_clock_set_master_clock_id_locked(clock_id);
+  clock_state_give();
+}
+
+uint64_t ptp_clock_get_master_clock_id(void) {
+  clock_state_take();
+  uint64_t result = ptp_clock_get_master_clock_id_locked();
+  clock_state_give();
+  return result;
+}
+
+void ptp_clock_get_stats(ptp_stats_t *stats) {
+  clock_state_take();
+  ptp_clock_get_stats_locked(stats);
+  clock_state_give();
 }

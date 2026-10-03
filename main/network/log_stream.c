@@ -74,12 +74,12 @@ static size_t ring_read(char *buf, size_t max) {
 
 static int log_vprintf_hook(const char *fmt, va_list args) {
   /* Always print to UART first. */
+  va_list copy;
+  va_copy(copy, args);
   int ret = s_orig_vprintf(fmt, args);
 
   /* Format into a stack buffer and push to ring. */
   char buf[256];
-  va_list copy;
-  va_copy(copy, args);
   int len = vsnprintf(buf, sizeof(buf), fmt, copy);
   va_end(copy);
 
