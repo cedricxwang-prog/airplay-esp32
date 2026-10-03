@@ -88,6 +88,9 @@ static void airplay_adjust_volume(float step_db) {
 
   float new_db = clamp_volume(current_db + step_db);
   airplay_set_volume(new_db);
+  if (s_muted) {
+    dac_set_volume(VOLUME_MIN_DB);
+  }
 
   if (s_muted) {
     // Update saved level so unmute restores the new volume

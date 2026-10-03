@@ -202,7 +202,7 @@ menu "Airplay ESP Configuration"
         default 44100
 
     config RESAMPLER_TAPS
-        int "Resampler filter taps (quality)" if OUTPUT_SAMPLE_RATE_48000
+        int "Resampler filter taps (quality)"
         range 4 64
         default 28 if IDF_TARGET_ESP32S3
         default 12 if IDF_TARGET_ESP32
