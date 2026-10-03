@@ -279,8 +279,9 @@ uint32_t settings_get_airplay_features_lo(void) {
 #ifdef CONFIG_AIRPLAY_FORCE_V1
   return 0x005C4A00;
 #else
-  /* bit 26 advertises an audio accessory for the generic speaker preset. */
-  return g_airplay_icon == 2 ? 0x445C4A00 : 0x405C4A00;
+  /* Icon presets change identity only. Bit 26 selects authentication behavior;
+   * it is not a cosmetic speaker flag and is unsupported by this receiver. */
+  return 0x405C4A00;
 #endif
 }
 
