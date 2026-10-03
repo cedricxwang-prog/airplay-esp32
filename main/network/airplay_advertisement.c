@@ -10,6 +10,11 @@
 #define METADATA_TYPES "0,2"
 #endif
 
+bool airplay_info_has_txt(uint64_t features, const char *model) {
+  return (features & (UINT64_C(1) << 30)) != 0 && model &&
+         strcmp(model, "AirPlay-ESP32-Speaker") == 0;
+}
+
 bool airplay_advertisement_build(airplay_advertisement_t *ad,
                                  const char *device_id,
                                  const uint8_t *public_key,

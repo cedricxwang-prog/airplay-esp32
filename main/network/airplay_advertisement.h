@@ -29,6 +29,10 @@ bool airplay_advertisement_build(airplay_advertisement_t *advertisement,
                                  size_t public_key_len, uint64_t features,
                                  const char *model, const char *manufacturer);
 
+/* Generic AP2 identities supply TXT snapshots without changing authentication
+ * capabilities. Bit 30 is the existing unified advertiser capability. */
+bool airplay_info_has_txt(uint64_t features, const char *model);
+
 /* DNS TXT RDATA: one length byte followed by key=value bytes for each item.
  * Returns zero for invalid items or insufficient output capacity. */
 size_t airplay_txt_encode(uint8_t *out, size_t capacity,
