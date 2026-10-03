@@ -245,9 +245,9 @@ static bool bplist_finish(uint8_t *out, size_t capacity, size_t *pos,
   return true;
 }
 
-size_t bplist_build_initial_setup(uint8_t *out, size_t capacity,
-                                  uint16_t event_port) {
-  if (capacity < 100) {
+static size_t bplist_build_initial_setup_legacy(uint8_t *out, size_t capacity,
+                                               uint16_t event_port) {
+  if (!out || capacity < 100) {
     return 0;
   }
 
@@ -313,6 +313,72 @@ size_t bplist_build_initial_setup(uint8_t *out, size_t capacity,
   out[pos++] = (uint8_t)offset_table_offset;
 
   return pos;
+}
+
+size_t bplist_build_initial_setup_with_timing_peer(
+    uint8_t *out, size_t capacity, uint16_t event_port,
+    const char *receiver_address) {
+  if (!receiver_address) {
+    return bplist_build_initial_setup_legacy(out, capacity, event_port);
+  }
+  if (!out || receiver_address[0] == '\0' ||
+      !bplist_has_room(0, 8, capacity)) {
+    return 0;
+  }
+
+  size_t pos = 8;
+  memcpy(out, "bplist00", 8);
+  size_t offsets[11];
+  size_t obj = 0;
+
+#define SETUP_STRING(value)                                                     \
+  do {                                                                         \
+    offsets[obj++] = pos;                                                       \
+    if (!bplist_write_string(out, capacity, &pos, value)) { return 0; }           \
+  } while (0)
+#define SETUP_INT(value)                                                        \
+  do {                                                                         \
+    offsets[obj++] = pos;                                                       \
+    if (!bplist_write_int(out, capacity, &pos, value)) { return 0; }              \
+  } while (0)
+
+  SETUP_STRING("eventPort");       // 0
+  SETUP_INT(event_port);            // 1
+  SETUP_STRING("timingPort");      // 2
+  SETUP_INT(0);                     // 3: PTP uses the standard multicast ports
+  SETUP_STRING("timingPeerInfo");  // 4
+  SETUP_STRING("Addresses");       // 5
+  SETUP_STRING(receiver_address);   // 6: shared by Addresses[] and ID
+  offsets[obj++] = pos;             // 7: Addresses[]
+  const uint8_t address_refs[] = {6};
+  if (!bplist_write_array(out, capacity, &pos, address_refs, 1)) {
+    return 0;
+  }
+  SETUP_STRING("ID");              // 8
+  offsets[obj++] = pos;             // 9: timingPeerInfo
+  const uint8_t peer_keys[] = {5, 8};
+  const uint8_t peer_values[] = {7, 6};
+  if (!bplist_write_dict(out, capacity, &pos, peer_keys, peer_values, 2)) {
+    return 0;
+  }
+  offsets[obj++] = pos;             // 10: top-level SETUP response
+  const uint8_t keys[] = {0, 2, 4};
+  const uint8_t values[] = {1, 3, 9};
+  if (!bplist_write_dict(out, capacity, &pos, keys, values, 3) ||
+      obj != sizeof(offsets) / sizeof(offsets[0]) ||
+      !bplist_finish(out, capacity, &pos, offsets, obj, 10)) {
+    return 0;
+  }
+
+#undef SETUP_STRING
+#undef SETUP_INT
+  return pos;
+}
+
+size_t bplist_build_initial_setup(uint8_t *out, size_t capacity,
+                                  uint16_t event_port) {
+  return bplist_build_initial_setup_with_timing_peer(out, capacity, event_port,
+                                                    NULL);
 }
 
 size_t bplist_build_stream_setup(uint8_t *out, size_t capacity,
@@ -561,7 +627,7 @@ size_t bplist_build_info_response(uint8_t *out, size_t capacity,
 
   size_t pos = 0;
   size_t offsets[45];
-  bool include_txt = (features & (UINT64_C(1) << 26)) != 0;
+  bool include_txt = airplay_info_has_txt(features, settings_get_airplay_model());
   size_t obj = 0;
 
 #define ADD_OFFSET()                                   \

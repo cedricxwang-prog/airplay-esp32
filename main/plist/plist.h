@@ -255,6 +255,16 @@ size_t bplist_build_initial_setup(uint8_t *out, size_t capacity,
                                   uint16_t event_port);
 
 /**
+ * Build initial SETUP response with an optional local PTP peer address.
+ * For PTP, timingPeerInfo contains Addresses=[receiver_address] and the same
+ * address as ID. Pass NULL to preserve the legacy eventPort/timingPort reply.
+ * @return Length of generated bplist, or 0 for invalid input/small capacity
+ */
+size_t bplist_build_initial_setup_with_timing_peer(
+    uint8_t *out, size_t capacity, uint16_t event_port,
+    const char *receiver_address);
+
+/**
  * Build stream SETUP response bplist (with streams array)
  * Returns streams[] array with type, dataPort, controlPort, audioBufferSize.
  * @param out Output buffer
