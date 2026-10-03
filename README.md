@@ -18,9 +18,11 @@
 
 ---
 
-## Cedric fork — 0.2.5 by cedric
+## Cedric fork — 0.2.6 by cedric
 
-下载本分支固件：[0.2.5 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.5-cedric.1)。[Release Note](RELEASE-NOTES-0.2.5.md) 列出本次图标分类改动与验证；[0.2.4 Note](RELEASE-NOTES-0.2.4.md) 记录相对上游的音频与 WiFi 优化。
+下载本分支固件：[0.2.6 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.6-cedric.1)。[Release Note](RELEASE-NOTES-0.2.6.md) 列出 AirPlay 握手、PTP 会话清理修复及实际 Spotify 验证；[0.2.4 Note](RELEASE-NOTES-0.2.4.md) 记录相对上游的音频与 WiFi 优化。本分支基于 [rbouteiller/airplay-esp32](https://github.com/rbouteiller/airplay-esp32)。
+
+用户通过 Mac 顶部系统喇叭选择 Edifier，已确认 0.2.6 的 Spotify 持续播放听感正常。两次独立日志窗口显示 PTP 锁定与 `gaps=0`；多设备声学同步及长时间漂移尚未测量。The requested menu-bar system-output/Spotify listening test passed; grouped acoustic synchronization remains unmeasured.
 
 WebUI 支持中英文：扫描 WiFi → 点选网络 → 输入密码连接；已保存网络可复用密码，重启并确认实际连接后显示“已连接”。扫描保持原 WiFi 关联，不再主动断线。
 

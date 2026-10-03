@@ -2,6 +2,8 @@
 cmake_minimum_required(VERSION 3.16)
 
 # Read firmware version from version.txt
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/version.txt")
 file(READ "${CMAKE_SOURCE_DIR}/version.txt" PROJECT_VER)
 string(STRIP "${PROJECT_VER}" PROJECT_VER)
 
