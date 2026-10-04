@@ -112,11 +112,12 @@ input:focus{outline:none;border-color:#e94560}
 <a href='/eq' class='btn btn-secondary' data-zh="均衡器设置" data-en="EQ Settings">均衡器设置</a></div>
 </div>
 <div class='card'><h2 data-zh="固件升级" data-en="Firmware Update">固件升级</h2>
+<p class='wifi-current' data-zh='选择应用 OTA BIN。新版固件包含 WebUI，升级后会核对固件与页面版本。' data-en='Choose an application OTA BIN. New firmware includes the WebUI; both versions are checked after updating.'>选择应用 OTA BIN。新版固件包含 WebUI，升级后会核对固件与页面版本。</p>
 <div class='file-row'><input type='file' id='fw-file' accept='.bin' style='display:none'>
-<button class='btn btn-secondary' onclick='document.getElementById("fw-file").click()' data-zh="选择文件" data-en="Choose File">选择文件</button>
+<button class='btn btn-secondary' id='fw-choose' onclick='document.getElementById("fw-file").click()' data-zh="选择文件" data-en="Choose File">选择文件</button>
 <span class='file-name' id='fw-name' data-zh="未选择文件" data-en="No file selected">未选择文件</span></div>
 <button class='btn btn-primary btn-block' id='ota-btn' onclick='startOTA()' disabled data-zh="上传固件" data-en="Upload Firmware">上传固件</button>
-<div id='ota-msg'></div></div>
+<div id='ota-msg' role='status' aria-live='polite'></div></div>
 <div class='card'><h2 data-zh="系统信息" data-en="System">系统信息</h2>
 <div class='info-grid'>
 <div class='info-item'><label data-zh="IP 地址" data-en="IP Address">IP 地址</label><span id='info-ip'>-</span></div>
@@ -124,6 +125,7 @@ input:focus{outline:none;border-color:#e94560}
 <div class='info-item'><label data-zh="设备名称" data-en="Device Name">设备名称</label><span id='info-name'>-</span></div>
 <div class='info-item'><label data-zh="可用内存" data-en="Free Memory">可用内存</label><span id='info-heap'>-</span></div>
 <div class='info-item'><label data-zh="固件版本" data-en="Firmware">固件版本</label><span id='info-fw'>-</span></div>
+<div class='info-item'><label data-zh="页面版本" data-en="WebUI">页面版本</label><span id='info-webui'>-</span></div>
 <div class='info-item'><label data-zh="运行时间" data-en="Uptime">运行时间</label><span id='info-uptime'>-</span></div>
 <div class='info-item'><label data-zh="上次重启" data-en="Last reset">上次重启</label><span id='info-reset'>-</span></div>
 <div class='info-item'><label data-zh="WiFi 名称" data-en="WiFi SSID">WiFi 名称</label><span id='info-ssid'>-</span></div>
@@ -149,7 +151,8 @@ function applyLanguage(){
  document.querySelectorAll('[data-zh]').forEach(function(e){e.textContent=e.dataset[uiLanguage];});
  document.querySelectorAll('[data-placeholder-zh]').forEach(function(e){e.placeholder=e.dataset[uiLanguage==='en'?'placeholderEn':'placeholderZh'];});
  document.getElementById('ui-language').value=uiLanguage;
- applyChanLabels();renderSavedWiFi();loadInfo();
+ applyChanLabels();renderSavedWiFi();renderOTAStatus();loadInfo();
+ var f=(document.getElementById('fw-file').files||[])[0];if(f)document.getElementById('fw-name').textContent=f.name;
 }
 
 function msg(id,txt,type){var e=document.getElementById(id);if(e){e.replaceChildren();var box=document.createElement('div');box.className='msg '+type;box.textContent=txt;e.appendChild(box);setTimeout(function(){e.innerHTML='';},4000);}}
@@ -304,15 +307,152 @@ async function saveName(){
   try{var r=await fetch('/api/device/name',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
     var d=await r.json();if(d.success){msg('name-msg',tr("已保存！重启后生效","Saved! Restart to apply."),'ok');loadInfo();}else{msg('name-msg',d.error,'err');}}
   catch(e){msg('name-msg',tr("错误","Error"),'err');}}
+var otaBusy=false,otaStatus=null;
+var OTA_UPLOAD_TIMEOUT=180000,OTA_VERIFY_TIMEOUT=90000,OTA_POLL_INTERVAL=2000;
+function otaMessage(zh,en,type){otaStatus={zh:zh,en:en,type:type};renderOTAStatus();}
+function otaError(zh,en){var e=new Error(tr(zh,en));e.otaZh=zh;e.otaEn=en;return e;}
+function renderOTAStatus(){
+  if(!otaStatus)return;var e=document.getElementById('ota-msg');e.replaceChildren();
+  var box=document.createElement('div');box.className='msg '+otaStatus.type;
+  box.textContent=otaStatus[uiLanguage];e.appendChild(box);
+}
+function setOTABusy(busy){
+  otaBusy=busy;document.getElementById('fw-file').disabled=busy;
+  document.getElementById('fw-choose').disabled=busy;
+  document.getElementById('ota-btn').disabled=busy||!document.getElementById('fw-file').files[0];
+}
+async function otaReadInfo(timeoutMs){
+  var controller=new AbortController();var timer=setTimeout(function(){controller.abort();},timeoutMs);
+  try{var r=await fetch('/api/system/info',{cache:'no-store',signal:controller.signal});
+    if(!r.ok)return null;var d=await r.json();return d.success&&d.info?d.info:null;
+  }catch(e){return null;}finally{clearTimeout(timer);}
+}
+async function otaImageBytes(file,offset,length){
+  var timer;try{
+    var data=await Promise.race([file.slice(offset,offset+length).arrayBuffer(),new Promise(function(resolve,reject){
+      timer=setTimeout(function(){reject(otaError('读取固件超时','Firmware read timed out'));},5000);
+    })]);
+    var b=new Uint8Array(data);if(b.length!==length)throw otaError('固件文件不完整','Firmware file is truncated');return b;
+  }finally{clearTimeout(timer);}
+}
+async function validateOTAFirmware(file,info){
+  // Check the application image, rather than the filename. Bootloader/factory
+  // images have no app descriptor at the start of their first segment.
+  if(!Number.isSafeInteger(file.size)||file.size<288||file.size>128*1024*1024)
+    throw otaError('固件大小无效；请选择应用 OTA BIN','Invalid size; choose an application OTA BIN');
+  if(info&&Number.isSafeInteger(info.ota_partition_size)&&info.ota_partition_size>0&&file.size>info.ota_partition_size)
+    throw otaError('固件超过设备 OTA 分区大小','Firmware exceeds this device’s OTA partition');
+  var prefix=await otaImageBytes(file,0,288),view=new DataView(prefix.buffer,prefix.byteOffset,prefix.byteLength);
+  if(prefix[0]!==0xe9||prefix[1]<1||prefix[1]>16||prefix[23]>1||view.getUint32(32,true)!==0xabcd5432||view.getUint32(28,true)<256)
+    throw otaError('不是应用 OTA 镜像；请勿选择合并 / factory BIN','Not an application OTA image; do not select a merged / factory BIN');
+  var chipId=view.getUint16(12,true);
+  if(chipId===0xffff)throw otaError('固件芯片标识无效','Invalid firmware chip ID');
+  // Older firmware may not provide the target ID. Do not guess it from board
+  // names or reject a supported chip using a hardcoded model whitelist.
+  if(info&&Number.isInteger(info.image_chip_id)&&info.image_chip_id>=0&&info.image_chip_id<=0xfffe&&chipId!==info.image_chip_id)
+    throw otaError('固件芯片与设备不匹配','Firmware chip does not match this device');
+  var version='';for(var v=48;v<80&&prefix[v]!==0;v++){
+    if(prefix[v]<32||prefix[v]>126)throw otaError('固件版本字段无效','Invalid firmware version field');
+    version+=String.fromCharCode(prefix[v]);
+  }
+  if(!version.trim()||v===80)throw otaError('固件缺少有效版本','Firmware has no valid version');
+  var offset=24;
+  for(var s=0;s<prefix[1];s++){
+    if(offset+8>file.size)throw otaError('固件文件不完整','Firmware file is truncated');
+    var header=s===0?prefix.subarray(24,32):await otaImageBytes(file,offset,8);
+    var length=new DataView(header.buffer,header.byteOffset,8).getUint32(4,true);
+    if(length>file.size-offset-8)throw otaError('固件段长度无效','Invalid firmware segment length');
+    offset+=8+length;
+  }
+  // One checksum byte occupies the last byte of the next 16-byte boundary.
+  // A factory image or appended second image must not pass as an app image.
+  var expected=(Math.floor(offset/16)+1)*16+(prefix[23]===1?32:0);
+  if(expected!==file.size)throw otaError('固件不完整或包含额外镜像；请选择应用 OTA BIN','Truncated or combined image; choose an application OTA BIN');
+  return {version:version,chipId:chipId,size:file.size};
+}
+function otaRebootObserved(before,now){
+  if(typeof before.boot_id==='string'&&before.boot_id)
+    return typeof now.boot_id==='string'&&!!now.boot_id&&before.boot_id!==now.boot_id;
+  // app_desc describes the running application; a changed version proves a
+  // new application has booted even when upgrading an older API without ID.
+  if(typeof before.firmware_version==='string'&&before.firmware_version&&typeof now.firmware_version==='string'&&now.firmware_version!==before.firmware_version)return true;
+  // An offline request or zero uptime alone is not proof of a same-version
+  // reboot. Allow old APIs only when positive uptime dropped beyond rounding.
+  return Number.isFinite(before.uptime_s)&&before.uptime_s>0&&Number.isFinite(now.uptime_s)&&now.uptime_s>0&&
+    now.uptime_s+2<before.uptime_s;
+}
+function otaSameDevice(before,now){
+  return !before.mac||(typeof now.mac==='string'&&String(before.mac).toLowerCase()===now.mac.toLowerCase());
+}
+async function otaPageMatches(version,timeoutMs){
+  var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},timeoutMs);
+  try{var r=await fetch('/',{cache:'no-store',signal:controller.signal});
+    var matches=r.ok&&r.headers.get('X-WebUI-Version')===version&&r.headers.get('X-WebUI-Source')==='embedded';
+    await r.text();return matches;
+  }catch(e){return false;}finally{clearTimeout(timer);}
+}
+async function verifyOTA(image,before){
+  var deadline=Date.now()+OTA_VERIFY_TIMEOUT,consecutive=0,last=null;
+  var reason={zh:'设备尚未返回',en:'Device has not returned'};
+  while(Date.now()<deadline){
+    await new Promise(function(resolve){setTimeout(resolve,Math.min(OTA_POLL_INTERVAL,Math.max(1,deadline-Date.now())));});
+    if(Date.now()>=deadline)break;
+    var info=await otaReadInfo(Math.min(4000,Math.max(1,deadline-Date.now())));
+    if(!info){consecutive=0;last=null;continue;}
+    var matches=info.firmware_version===image.version&&info.webui_version===image.version&&info.webui_source==='embedded';
+    if(!otaSameDevice(before,info)){reason={zh:'返回的设备身份不同',en:'A different device responded'};consecutive=0;last=null;continue;}
+    if(!matches){reason={zh:'固件或内置页面版本尚未匹配',en:'Firmware or embedded WebUI version does not match'};consecutive=0;last=null;continue;}
+    if(!otaRebootObserved(before,info)){reason={zh:'尚未确认设备重启',en:'Device restart has not been confirmed'};consecutive=0;last=null;continue;}
+    // Two fresh responses avoid confirming an unstable initial boot. With a
+    // boot ID, both responses must come from the same new boot.
+    var stable=last&&(!info.boot_id||last.boot_id===info.boot_id)&&
+      (!Number.isFinite(last.uptime_s)||!Number.isFinite(info.uptime_s)||info.uptime_s>=last.uptime_s);
+    consecutive=stable?consecutive+1:1;last=info;
+    if(consecutive<2)continue;
+    if(Date.now()>=deadline)break;
+    if(!await otaPageMatches(image.version,Math.min(4000,Math.max(1,deadline-Date.now())))){
+      reason={zh:'实际页面版本或来源尚未匹配',en:'Served WebUI version or source does not match'};consecutive=0;last=null;continue;
+    }
+    if(Date.now()>=deadline)break;
+    otaMessage('已验证：固件与内置页面均为 '+image.version+'，设备已重启。正在刷新页面…',
+      'Verified: firmware and embedded WebUI are both '+image.version+'. Device restarted. Refreshing…','ok');
+    setTimeout(function(){window.location.replace('/?ui='+encodeURIComponent(image.version)+'&t='+Date.now());},2000);
+    return true;
+  }
+  otaMessage('升级未确认：'+reason.zh+'。请检查设备状态后再重试。','Update unconfirmed: '+reason.en+'. Check the device before retrying.','err');
+  return false;
+}
 async function startOTA(){
-  var f=document.getElementById('fw-file').files[0];if(!f){msg('ota-msg',tr("请选择文件","Select a file"),'err');return;}
-  document.getElementById('ota-btn').disabled=true;msg('ota-msg',tr("上传中…","Uploading..."),'info');
-  try{var response=await fetch('/api/ota/update',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f});if(!response.ok)throw new Error(await response.text());msg('ota-msg',tr("完成！设备重启中…","Done! Rebooting..."),'ok');}
-  catch(e){msg('ota-msg',tr('升级未确认：','Update unconfirmed: ')+e.message,'err');document.getElementById('ota-btn').disabled=false;}}
+  if(otaBusy)return;var file=document.getElementById('fw-file').files[0];
+  if(!file){otaMessage('请选择应用 OTA BIN','Select an application OTA BIN','err');return;}
+  setOTABusy(true);var verified=false,attempted=false;
+  try{
+    otaMessage('检查固件与设备信息…','Checking firmware and device information…','info');
+    var before=await otaReadInfo(6000);
+    if(!before||typeof before.firmware_version!=='string'||!before.firmware_version)
+      throw otaError('无法读取设备信息，未上传，请重试','Cannot read device information; nothing uploaded. Retry.');
+    var image=await validateOTAFirmware(file,before);
+    otaMessage('上传 '+image.version+'（'+Math.round(image.size/1024)+' KB）…','Uploading '+image.version+' ('+Math.round(image.size/1024)+' KB)…','info');
+    var controller=new AbortController(),timer=setTimeout(function(){controller.abort();},OTA_UPLOAD_TIMEOUT),uncertain=false;
+    try{
+      // Preserve the raw POST interface supported by earlier firmware.
+      attempted=true;
+      var response=await fetch('/api/ota/update',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file,signal:controller.signal});
+      if(!response.ok){var details='';try{details=(await response.text()).slice(0,240);}catch(e){}
+        otaMessage('上传失败：HTTP '+response.status+(details?' — '+details:''),'Upload failed: HTTP '+response.status+(details?' — '+details:''),'err');return;}
+      await response.text();
+    }catch(e){uncertain=true;}finally{clearTimeout(timer);}
+    otaMessage(uncertain?'上传响应中断，正在核对重启及版本…':'上传已接受，等待设备重启并核对版本…',
+      uncertain?'Upload response interrupted; checking restart and versions…':'Upload accepted; waiting for restart and checking versions…','info');
+    verified=await verifyOTA(image,before);
+  }catch(e){otaMessage((attempted?'升级未确认：':'未上传：')+(e.otaZh||e.message),(attempted?'Update unconfirmed: ':'Not uploaded: ')+(e.otaEn||e.message),'err');}
+  finally{if(!verified)setOTABusy(false);}
+}
 async function restart(){
   if(!confirm(tr("确定重启设备？","Restart the device?")))return;
   try{await fetch('/api/system/restart',{method:'POST'});msg('',tr("重启中…","Restarting..."),'info');}catch(e){}}
 async function loadInfo(timeoutMs){
+  if(otaBusy)return null;
   var controller=new AbortController();var timeout=setTimeout(function(){controller.abort();},typeof timeoutMs==='number'?timeoutMs:6000);
   try{var r=await fetch('/api/system/info',{cache:'no-store',signal:controller.signal});var d=await r.json();
     if(!r.ok||!d.success)return null;
@@ -325,6 +465,7 @@ async function loadInfo(timeoutMs){
       document.getElementById('info-name').textContent=i.device_name||'-';
       document.getElementById('info-heap').textContent=Math.round(i.free_heap/1024)+' KB';
       document.getElementById('info-fw').textContent=i.firmware_version?i.firmware_version+' by cedric':'-';
+      document.getElementById('info-webui').textContent=i.webui_version||'-';
       function fmtUptime(s){if(s==null)return '-';var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
         return (d?d+'d ':'')+(d||h?h+'h ':'')+m+'m '+(s%60)+'s';}
       document.getElementById('info-uptime').textContent=fmtUptime(i.uptime_s);
@@ -345,6 +486,6 @@ async function loadInfo(timeoutMs){
 window.onload=function(){applyLanguage();document.getElementById('ui-language').onchange=function(){uiLanguage=this.value;localStorage.setItem('airplay-language',uiLanguage);applyLanguage();};
   document.getElementById('fw-file').onchange=function(e){var f=e.target.files[0];
     document.getElementById('fw-name').textContent=f?f.name:tr("未选择文件","No file selected");
-    document.getElementById('ota-btn').disabled=!f;};
+    document.getElementById('ota-btn').disabled=otaBusy||!f;};
   loadIcon();loadSavedWiFi();loadInfo();loadBrightness();loadChannel();setInterval(loadInfo,30000);};
 </script></body></html>
