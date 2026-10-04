@@ -3,7 +3,12 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
+#include "esp_random.h"
+#include "esp_app_format.h"
+#include "esp_ota_ops.h"
 #include "cJSON.h"
+#include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -63,35 +68,41 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t s_server = NULL;
+static char s_boot_id[17];
+
+extern const uint8_t index_html_start[] asm("_binary_index_html_start");
+extern const uint8_t index_html_end[] asm("_binary_index_html_end");
+extern const uint8_t logs_html_start[] asm("_binary_logs_html_start");
+extern const uint8_t logs_html_end[] asm("_binary_logs_html_end");
+extern const uint8_t speedtest_html_start[] asm("_binary_speedtest_html_start");
+extern const uint8_t speedtest_html_end[] asm("_binary_speedtest_html_end");
+extern const uint8_t eq_html_start[] asm("_binary_eq_html_start");
+extern const uint8_t eq_html_end[] asm("_binary_eq_html_end");
 
 #define SPIFFS_CHUNK_SIZE 1024
 
-static esp_err_t serve_spiffs_file(httpd_req_t *req, const char *path,
-                                   const char *content_type) {
-  FILE *f = fopen(path, "r");
-  if (!f) {
-    ESP_LOGE(TAG, "Failed to open %s", path);
-    httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
-    return ESP_FAIL;
+static esp_err_t serve_embedded_page(httpd_req_t *req, const uint8_t *start,
+                                     const uint8_t *end) {
+  if (!start || !end || (uintptr_t)end <= (uintptr_t)start ||
+      (uintptr_t)end - (uintptr_t)start > INT_MAX) {
+    return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Embedded page unavailable");
   }
-  httpd_resp_set_type(req, content_type);
-  char buf[SPIFFS_CHUNK_SIZE];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-    if (httpd_resp_send_chunk(req, buf, (ssize_t)n) != ESP_OK) {
-      fclose(f);
-      httpd_resp_send_chunk(req, NULL, 0);
-      return ESP_FAIL;
-    }
-  }
-  fclose(f);
-  httpd_resp_send_chunk(req, NULL, 0);
-  return ESP_OK;
+  esp_err_t err = httpd_resp_set_type(req, "text/html; charset=utf-8");
+  if (err != ESP_OK) return err;
+  err = httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  if (err != ESP_OK) return err;
+  err = httpd_resp_set_hdr(req, "X-WebUI-Version", esp_app_get_description()->version);
+  if (err != ESP_OK) return err;
+  err = httpd_resp_set_hdr(req, "X-WebUI-Source", "embedded");
+  if (err != ESP_OK) return err;
+  return httpd_resp_send(req, (const char *)start,
+                         (ssize_t)((uintptr_t)end - (uintptr_t)start));
 }
 
 // API handlers
 static esp_err_t root_handler(httpd_req_t *req) {
-  return serve_spiffs_file(req, "/spiffs/www/index.html", "text/html");
+  return serve_embedded_page(req, index_html_start, index_html_end);
 }
 
 static esp_err_t favicon_handler(httpd_req_t *req) {
@@ -101,11 +112,11 @@ static esp_err_t favicon_handler(httpd_req_t *req) {
 }
 
 static esp_err_t logs_page_handler(httpd_req_t *req) {
-  return serve_spiffs_file(req, "/spiffs/www/logs.html", "text/html");
+  return serve_embedded_page(req, logs_html_start, logs_html_end);
 }
 
 static esp_err_t speedtest_page_handler(httpd_req_t *req) {
-  return serve_spiffs_file(req, "/spiffs/www/speedtest.html", "text/html");
+  return serve_embedded_page(req, speedtest_html_start, speedtest_html_end);
 }
 
 // Tiny endpoint used by JS for RTT timing. Returns minimal body.
@@ -995,13 +1006,24 @@ static esp_err_t ota_update_handler(httpd_req_t *req) {
     return ESP_FAIL;
   }
 
-  // Stop AirPlay to free resources during OTA
-  ESP_LOGI(TAG, "Stopping AirPlay for OTA update");
-  rtsp_server_stop();
+  // Release playback resources during OTA and restore the listener if the
+  // update fails. Keep receivers whose listener was already disabled idle.
+  bool resume_airplay = rtsp_server_is_running();
+  if (resume_airplay) {
+    ESP_LOGI(TAG, "Stopping AirPlay for OTA update");
+    rtsp_server_stop();
+  }
 
   esp_err_t err = ota_start_from_http(req);
 
   if (err != ESP_OK) {
+    if (resume_airplay) {
+      esp_err_t restore_err = rtsp_server_start();
+      if (restore_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restore AirPlay after OTA failure: %s",
+                 esp_err_to_name(restore_err));
+      }
+    }
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
                         esp_err_to_name(err));
     return ESP_FAIL;
@@ -1103,6 +1125,18 @@ static esp_err_t system_info_handler(httpd_req_t *req) {
   }
   const esp_app_desc_t *app_desc = esp_app_get_description();
   cJSON_AddStringToObject(info, "firmware_version", app_desc->version);
+  cJSON_AddStringToObject(info, "webui_version", app_desc->version);
+  cJSON_AddStringToObject(info, "webui_source", "embedded");
+  cJSON_AddStringToObject(info, "boot_id", s_boot_id);
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_image_header_t image_header;
+  if (running && esp_partition_read(running, 0, &image_header,
+                                    sizeof(image_header)) == ESP_OK &&
+      image_header.magic == ESP_IMAGE_HEADER_MAGIC) {
+    cJSON_AddNumberToObject(info, "image_chip_id", image_header.chip_id);
+  }
+  const esp_partition_t *next_ota = esp_ota_get_next_update_partition(NULL);
+  cJSON_AddNumberToObject(info, "ota_partition_size", next_ota ? next_ota->size : 0);
   cJSON_AddStringToObject(info, "reset_reason",
                           reset_reason_str(esp_reset_reason()));
   cJSON_AddNumberToObject(info, "uptime_s",
@@ -1320,7 +1354,7 @@ static esp_err_t fs_list_handler(httpd_req_t *req) {
 #ifdef CONFIG_DAC_TAS58XX
 
 static esp_err_t eq_page_handler(httpd_req_t *req) {
-  return serve_spiffs_file(req, "/spiffs/www/eq.html", "text/html");
+  return serve_embedded_page(req, eq_html_start, eq_html_end);
 }
 
 static esp_err_t eq_get_handler(httpd_req_t *req) {
@@ -1412,6 +1446,13 @@ esp_err_t web_server_start(uint16_t port) {
   if (s_server) {
     ESP_LOGW(TAG, "Web server already running");
     return ESP_OK;
+  }
+
+  // Public per-boot identity lets the UI confirm same-version reinstalls.
+  // Preserve it across web-server restarts within the same device boot.
+  if (!s_boot_id[0]) {
+    snprintf(s_boot_id, sizeof(s_boot_id), "%08" PRIx32 "%08" PRIx32,
+             esp_random(), esp_random());
   }
 
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();

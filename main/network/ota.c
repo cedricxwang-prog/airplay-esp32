@@ -5,10 +5,12 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "mbedtls/sha256.h"
+#include <stdbool.h>
 #include <string.h>
 #include <sys/param.h>
 
 static const char *TAG = "ota";
+#define OTA_MAX_RECV_TIMEOUTS 3
 
 /**
  * Validate an in-memory firmware image before writing to flash.
@@ -61,28 +63,37 @@ static esp_err_t ota_validate_image(const uint8_t *image, size_t len) {
  * Receive firmware into a PSRAM buffer, validate, then write to flash.
  * Returns ESP_ERR_NO_MEM if PSRAM allocation fails (caller can fall back).
  */
-static esp_err_t ota_buffered(httpd_req_t *req) {
+static esp_err_t ota_buffered(httpd_req_t *req, bool *can_stream) {
   size_t fw_size = req->content_len;
+  *can_stream = false;
 
   uint8_t *fw_buf = heap_caps_malloc(fw_size, MALLOC_CAP_SPIRAM);
   if (!fw_buf) {
     ESP_LOGW(TAG, "Cannot allocate %zu bytes in PSRAM", fw_size);
+    *can_stream = true;
     return ESP_ERR_NO_MEM;
   }
 
   // Receive entire firmware into RAM
   ESP_LOGI(TAG, "Receiving firmware into PSRAM (%zu bytes)...", fw_size);
   size_t received = 0;
+  unsigned timeouts = 0;
   while (received < fw_size) {
     int recv_len =
         httpd_req_recv(req, (char *)fw_buf + received, fw_size - received);
     if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+      if (++timeouts >= OTA_MAX_RECV_TIMEOUTS) {
+        ESP_LOGE(TAG, "Firmware upload timed out");
+        heap_caps_free(fw_buf);
+        return ESP_ERR_TIMEOUT;
+      }
       continue;
     } else if (recv_len <= 0) {
       ESP_LOGE(TAG, "Receive error: %d", recv_len);
       heap_caps_free(fw_buf);
       return ESP_FAIL;
     }
+    timeouts = 0;
     received += recv_len;
   }
 
@@ -158,18 +169,25 @@ static esp_err_t ota_streaming(httpd_req_t *req) {
 
   char buf[1024];
   size_t remaining = req->content_len;
+  unsigned timeouts = 0;
   ESP_LOGI(TAG, "Receiving firmware via streaming (%zu bytes)...", remaining);
 
   while (remaining > 0) {
     int recv_len = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));
 
     if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
+      if (++timeouts >= OTA_MAX_RECV_TIMEOUTS) {
+        ESP_LOGE(TAG, "Firmware upload timed out");
+        esp_ota_abort(ota_handle);
+        return ESP_ERR_TIMEOUT;
+      }
       continue;
     } else if (recv_len <= 0) {
       ESP_LOGE(TAG, "Receive error: %d", recv_len);
       esp_ota_abort(ota_handle);
       return ESP_FAIL;
     }
+    timeouts = 0;
 
     if (esp_ota_write(ota_handle, buf, recv_len) != ESP_OK) {
       ESP_LOGE(TAG, "Flash write failed");
@@ -195,10 +213,27 @@ static esp_err_t ota_streaming(httpd_req_t *req) {
 }
 
 esp_err_t ota_start_from_http(httpd_req_t *req) {
+  if (!req) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (req->content_len == 0) {
+    return ESP_ERR_INVALID_SIZE;
+  }
+  const esp_partition_t *partition = esp_ota_get_next_update_partition(NULL);
+  if (!partition) {
+    return ESP_ERR_NOT_FOUND;
+  }
+  if (req->content_len > partition->size) {
+    ESP_LOGE(TAG, "Firmware exceeds OTA partition (%zu > %zu)",
+             req->content_len, (size_t)partition->size);
+    return ESP_ERR_INVALID_SIZE;
+  }
+
   // Try RAM-buffered OTA first (validates image before writing to flash).
   // Falls back to streaming if PSRAM is not available or too small.
-  esp_err_t err = ota_buffered(req);
-  if (err == ESP_ERR_NO_MEM) {
+  bool can_stream = false;
+  esp_err_t err = ota_buffered(req, &can_stream);
+  if (err == ESP_ERR_NO_MEM && can_stream) {
     ESP_LOGW(TAG, "Falling back to streaming OTA (no PSRAM available)");
     err = ota_streaming(req);
   }
