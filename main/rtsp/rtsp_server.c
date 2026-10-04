@@ -665,6 +665,16 @@ static bool rtsp_server_wait_for_task_stopped(int timeout_ticks) {
   return server_task_handle == NULL;
 }
 
+static bool rtsp_server_wait_for_clients_stopped(int timeout_ticks) {
+  // Workers release their private resources before publishing task == NULL.
+  // Do not hold session_state_mutex here: their cleanup needs that mutex.
+  while ((clients[0].task != NULL || clients[1].task != NULL) &&
+         timeout_ticks-- > 0) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+  return clients[0].task == NULL && clients[1].task == NULL;
+}
+
 esp_err_t rtsp_server_start(void) {
   if (server_task_handle != NULL) {
     if (server_running) {
@@ -675,6 +685,11 @@ esp_err_t rtsp_server_start(void) {
       ESP_LOGE(TAG, "Previous RTSP server task did not stop");
       return ESP_ERR_INVALID_STATE;
     }
+  }
+
+  if (!rtsp_server_wait_for_clients_stopped(100)) {
+    ESP_LOGE(TAG, "Previous RTSP clients did not stop; refusing restart");
+    return ESP_ERR_INVALID_STATE;
   }
 
   if (!session_state_mutex) {
@@ -692,6 +707,10 @@ esp_err_t rtsp_server_start(void) {
   }
 
   return ESP_OK;
+}
+
+bool rtsp_server_is_running(void) {
+  return server_running;
 }
 
 void rtsp_server_stop(void) {

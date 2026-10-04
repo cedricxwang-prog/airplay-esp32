@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esp_err.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 /**
@@ -13,6 +14,9 @@ esp_err_t rtsp_server_start(void);
  * Stop the RTSP server
  */
 void rtsp_server_stop(void);
+
+/** Return whether the RTSP listener is running. */
+bool rtsp_server_is_running(void);
 
 /**
  * Set volume from AirPlay (in dB, range -144 to 0)
