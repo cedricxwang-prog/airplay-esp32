@@ -117,6 +117,11 @@ idf_component_register(
     SRCS ${SRC_FILES}
     INCLUDE_DIRS ${INC_DIRS}
     PRIV_REQUIRES ${DEPS}
+    EMBED_FILES
+        "${CMAKE_SOURCE_DIR}/data/www/index.html"
+        "${CMAKE_SOURCE_DIR}/data/www/logs.html"
+        "${CMAKE_SOURCE_DIR}/data/www/speedtest.html"
+        "${CMAKE_SOURCE_DIR}/data/www/eq.html"
 )
 
 # Enable function wrapping for abort() to intercept panics and mute GPIO
