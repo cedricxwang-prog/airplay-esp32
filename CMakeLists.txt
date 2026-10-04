@@ -32,7 +32,9 @@ project(airplay2-receiver VERSION ${PROJECT_VER})
 
 include(cmake/fix_usb_device_uac_platformio.cmake)
 
-# Build a SPIFFS image from data/ and flash it alongside the firmware.
+# Web pages are embedded in the application by main/CMakeLists.txt so an
+# application OTA updates firmware and WebUI together. Preserve the SPIFFS
+# image for the board-specific assets below and existing file-management API.
 # Partition label "storage" matches partitions.csv. Used by:
 #   - components/dac_tas57xx/ (HybridFlow DAC firmware)
 #   - components/display/     (ST7789 background image)

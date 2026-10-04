@@ -18,17 +18,19 @@
 
 ---
 
-## Cedric fork — 0.2.6 by cedric
+## Cedric fork — 0.2.7 by cedric
 
-下载本分支固件：[0.2.6 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.6-cedric.1)。[Release Note](RELEASE-NOTES-0.2.6.md) 列出 AirPlay 握手、PTP 会话清理修复及实际 Spotify 验证；[0.2.4 Note](RELEASE-NOTES-0.2.4.md) 记录相对上游的音频与 WiFi 优化。本分支基于 [rbouteiller/airplay-esp32](https://github.com/rbouteiller/airplay-esp32)。
+下载本分支固件：[0.2.7 Release / BIN](https://github.com/cedricxwang-prog/airplay-esp32/releases/tag/v0.2.7-cedric.1)。上传一个 `AirPlay-ESP32S3-0.2.7-ota.bin` 即可同时更新程序和 WebUI，无需另传 `index.html`。[0.2.7 Release Note](RELEASE-NOTES-0.2.7.md) 列出本次 OTA 与页面整合改动；[0.2.6 Note](RELEASE-NOTES-0.2.6.md) 记录 AirPlay 握手/PTP 清理修复和实际 Spotify 验证，[0.2.4 Note](RELEASE-NOTES-0.2.4.md) 记录相对上游的音频与 WiFi 优化。本分支基于 [rbouteiller/airplay-esp32](https://github.com/rbouteiller/airplay-esp32)。
 
-用户通过 Mac 顶部系统喇叭选择 Edifier，已确认 0.2.6 的 Spotify 持续播放听感正常。两次独立日志窗口显示 PTP 锁定与 `gaps=0`；多设备声学同步及长时间漂移尚未测量。The requested menu-bar system-output/Spotify listening test passed; grouped acoustic synchronization remains unmeasured.
+0.2.7 将配置、日志和测速页面嵌入应用固件，支持 EQ 的板型同时包含 EQ 页面，避免 SPIFFS 中旧页面继续生效。主页面增加应用 BIN 检查，并在重启后核对设备身份、固件与 WebUI 版本再报告升级成功；同版本重装也需要重启证据。已保存 WiFi、名称、图标和输出设置继续保留，分区表不变。Firmware and available WebUI pages now update through one application BIN, including EQ on supported boards. The new main page validates the image and confirms a reboot, matching device identity and matching firmware/WebUI before reporting success.
+
+0.2.7 保留 0.2.6 的音频时钟、调度与输出算法。用户已确认 0.2.6 经 Mac 顶部系统喇叭切换后的 Spotify 持续播放听感正常；这项历史验收不代表已完成 0.2.7 的新试听。多设备声学同步及长时间漂移尚未测量。The 0.2.6 menu-bar system-output/Spotify listening test passed; 0.2.7 retains those audio algorithms. Grouped acoustic synchronization remains unmeasured.
 
 WebUI 支持中英文：扫描 WiFi → 点选网络 → 输入密码连接；已保存网络可复用密码，重启并确认实际连接后显示“已连接”。扫描保持原 WiFi 关联，不再主动断线。
 
 AirPlay 图标增加“通用音箱（类似 Sonos）”，保留 HomePod mini 与 Apple TV。选择并保存后重启应用；iOS/macOS 决定最终图案。Generic speaker mode advertises a third-party speaker identity with matching Bonjour and `/info` metadata; it does not claim to be a Sonos product.
 
-The release contains an OTA application image for the generic ESP32-S3 with 16 MB flash and the configured I2S wiring. Upload the BIN through the device's firmware update page, and upload `index.html` separately to `/api/fs/upload?path=/spiffs/www/index.html` with a raw POST body. The browser installer linked below installs upstream firmware. See the release note for matching firmware/output settings and synchronization test limits.
+The release contains one OTA application image for the generic ESP32-S3 with 16 MB flash, 8 MB PSRAM and the configured I2S wiring. Upload the BIN through the device's firmware update page; the embedded WebUI updates with it. When upgrading through an older page, wait for reboot and reopen the device address to load the new page. SPIFFS remains available for board-specific DSP/display assets and file management. This application image requires an existing compatible bootloader and partition table; it is not a complete first-flash image. The browser installer linked below installs upstream firmware. See the release note for hardware compatibility and synchronization test limits.
 
 ## What is this?
 
@@ -62,9 +64,18 @@ Building from source:
 ```bash
 git clone --recursive https://github.com/cedricxwang-prog/airplay-esp32
 cd airplay-esp32
-pio run -e esp32s3 -t upload
-pio run -e esp32s3 -t uploadfs   # required — writes the web UI to SPIFFS
+pio run -e esp32s3
+pio run -e esp32s3 -t upload    # first USB flash: generated bootloader, partitions and application
+# Only needed for hardware that uses SPIFFS DSP/display assets:
+# pio run -e <matching-board-environment> -t uploadfs
 ```
+
+For later OTA updates, use `.pio/build/esp32s3/firmware.bin` through the device's
+firmware update page. The CMake `EMBED_FILES` and PlatformIO
+`board_build.embed_files` declarations embed the four pages automatically;
+rebuild the application after changing a page. Separate WebUI uploads are no
+longer required. Select the build environment matching your board and output;
+the published generic ESP32-S3 BIN is not for every supported board.
 
 ## Features
 
